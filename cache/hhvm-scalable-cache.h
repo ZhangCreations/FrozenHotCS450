@@ -168,7 +168,12 @@ struct ConcurrentScalableCache {
   void monitor_stop();
 
   /* a flag to switch on/off the sampling of inner counters*/
-  bool stop_sample_stat = true; 
+  bool stop_sample_stat = true;
+
+  /**/
+  int exponentCap = 0;
+  int exponentialBackoffRemaining = 0;
+  double previousMissRatio = 0; 
 
 private:
   /**
@@ -679,6 +684,11 @@ WAIT_STABLE:
   /* become aware of DC latency (hit lat) and DC miss latency + disk latency (miss lat) */
   PrintStepLat(DC_hit_lat, miss_lat);
 
+  if(exponentialBackoffRemaining > 0){
+    exponentialBackoffRemaining -= 1;
+    goto WAIT_STABLE;
+  }
+
   // first do 100% FC
   for(size_t i = 0; i < m_numShards; i++){
     m_shards[i]->construct_tier();
@@ -746,6 +756,19 @@ WAIT_STABLE:
         best_avg, best_size, tFC_hit_, best_option_tMiss);
     }
   }
+
+  if(best_option_tMiss < previousMissRatio){
+    exponent = 0;
+    exponentialBackoffRemaining = 0;
+  } else {
+    if(exponentCap == 0){
+      exponentCap = 1;
+    } else {
+      exponentCap *= 2;
+    }
+    exponentialBackoffRemaining = exponentCap;
+  }
+  previousMissRatio = best_option_tMiss
   
   // Compare best "partially" frozen [0, 100%) one with 100% Frozen
   if(best_avg > Frozen_Avg){
