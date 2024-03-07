@@ -217,6 +217,11 @@ class FIFO_FHCache : public FHCacheAPI<TKey, TValue, THash> {
 
   void pushAfter(ListNode* nodeBefore, ListNode* nodeAfter);
 
+  /**
+   * Removes the leftmost node from the frozen list into the dynamic list
+   */
+  void meltFrozenListNodeToDynamicListNode();
+
 
   /**
    * Evict the least-recently used item from the container. This function does
@@ -296,9 +301,11 @@ bool FIFO_FHCache<TKey, TValue, THash>::construct_ratio(double FC_ratio) {
   // Check valid ratio
   assert(FC_ratio <= 1 && FC_ratio >=0);
   
+  std::unique_lock<ListMutex> upperLock(m_listMutex);
   // Check that Frozen LinkedList is empty (previously in DC mode)
   assert(m_fast_head.m_next == &m_fast_tail);
   assert(m_fast_tail.m_prev == &m_fast_head);
+  upperLock.unlock();
   
   // prepare eviction counter for later use
   // TODO @ Ziyue: when will it not 0?
@@ -526,6 +533,8 @@ void FIFO_FHCache<TKey, TValue, THash>::deconstruct() {
   /* if empty, need to point to each other
    * if not, need to not point to each other
    */
+  // Lock the whole list
+  std::unique_lock<ListMutex> lock(m_listMutex);
   assert(!((m_fast_head.m_next == &m_fast_tail) ^ (m_fast_tail.m_prev == &m_fast_head)));
   
   // If the cache was DC already, do nothing
@@ -535,8 +544,6 @@ void FIFO_FHCache<TKey, TValue, THash>::deconstruct() {
     return;
   }
 
-  // Lock the whole list
-  std::unique_lock<ListMutex> lock(m_listMutex);
   ListNode* node = m_head.m_next;
   
   // Put the frozen part at the start of the linkedlist (i.e. the Most recently used)
@@ -915,6 +922,22 @@ inline void FIFO_FHCache<TKey, TValue, THash>::pushAfter(ListNode* nodeBefore, L
   nodeBefore->m_next = nodeAfter;
 }
 
+template <class TKey, class TValue, class THash>
+inline void FIFO_FHCache<TKey, TValue, THash>::meltFrozenListNodeToDynamicListNode() {
+  if(fast_hash_ready) {
+    std::unique_lock<ListMutex> lock(m_listMutex);
+    if(m_fast_tail == nullptr) {
+      printf("m_fast_tail was set to nullptr!\n");
+    }
+    if(m_fast_tail.m_prev == &m_fast_head) return;
+    ListNode* nodeToMove = m_fast_tail.m_prev;
+    nodeToMove->m_prev->m_next = &m_fast_tail;
+    m_fast_tail.m_prev = nodeToMove->m_prev;
+    pushFront(nodeToMove);
+    m_fasthash->erase(nodeToMove->m_key);
+  }
+}
+
 // Eviction logic
 template <class TKey, class TValue, class THash>
 bool FIFO_FHCache<TKey, TValue, THash>::evict() {
@@ -1010,9 +1033,9 @@ void FIFO_FHCache<TKey, TValue, THash>::delete_key(const TKey& key) {
     }
   } // Found in the frozen part
   else if ((tier_ready || fast_hash_ready) && m_fasthash->find(key, ac) && (ac != nullptr)) {
+    std::unique_lock<ListMutex> lock(m_listMutex);
     node->m_key = TOMB_KEY; // Mark it as dead
     
-    // std::unique_lock<ListMutex> lock(m_listMutex);
     // m_fasthash.set_key_value(key, nullptr);
     // fast_hash_invalid++;
     // lock.unlock();
