@@ -758,14 +758,10 @@ WAIT_STABLE:
   }
 
   if(best_option_tMiss < previousMissRatio){
-    exponent = 0;
+    exponentCap = 0;
     exponentialBackoffRemaining = 0;
   } else {
-    if(exponentCap == 0){
-      exponentCap = 1;
-    } else {
-      exponentCap *= 2;
-    }
+    exponentCap == 0 ? 1 : exponentCap * 2;
     exponentialBackoffRemaining = exponentCap;
   }
   previousMissRatio = best_option_tMiss
