@@ -14,6 +14,8 @@ namespace FastHash
 
         virtual void thread_init(int tid) {}
 
+        virtual void remove_key(TKey idx) = 0;
+
         virtual void clear() = 0;
     };
     

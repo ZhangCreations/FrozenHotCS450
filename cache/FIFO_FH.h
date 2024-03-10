@@ -135,7 +135,7 @@ class FIFO_FHCache : public FHCacheAPI<TKey, TValue, THash> {
   /**
    * Create a container with a given maximum size
    */
-  explicit FIFO_FHCache(size_t maxSize);
+  explicit FIFO_FHCache(size_t maxSize, double chunkRatio = 0.2);
 
   FIFO_FHCache(const FIFO_FHCache& other) = delete;
   FIFO_FHCache& operator=(const FIFO_FHCache&) = delete;
@@ -218,9 +218,9 @@ class FIFO_FHCache : public FHCacheAPI<TKey, TValue, THash> {
   void pushAfter(ListNode* nodeBefore, ListNode* nodeAfter);
 
   /**
-   * Removes the leftmost node from the frozen list into the dynamic list
+   * Removes the tailmost chunk from the frozen list into the dynamic list
    */
-  void meltFrozenListNodeToDynamicListNode();
+  void melt();
 
 
   /**
@@ -270,6 +270,9 @@ class FIFO_FHCache : public FHCacheAPI<TKey, TValue, THash> {
   ListNode m_fast_head;
   ListNode m_fast_tail;
   ListNode *m_marker = nullptr;
+
+  std::vector<ListNode*> chunks;
+  const double CHUNK_RATIO;
 };
 
 template <class TKey, class TValue, class THash>
@@ -277,12 +280,13 @@ typename FIFO_FHCache<TKey, TValue, THash>::ListNode* const
     FIFO_FHCache<TKey, TValue, THash>::OutOfListMarker = (ListNode*)-1;
 
 template <class TKey, class TValue, class THash>
-FIFO_FHCache<TKey, TValue, THash>::FIFO_FHCache(size_t maxSize)
+FIFO_FHCache<TKey, TValue, THash>::FIFO_FHCache(size_t maxSize, double chunkRatio)
     : m_maxSize(maxSize),
       m_size(0),
       m_map(std::thread::hardware_concurrency() *
-            4)  // it will automatically grow
-{
+            4),  // it will automatically grow
+      CHUNK_RATIO(chunkRatio)
+      {
   m_head.m_prev = nullptr;
   m_head.m_next = &m_tail;
   m_tail.m_prev = &m_head;
@@ -391,7 +395,27 @@ bool FIFO_FHCache<TKey, TValue, THash>::construct_ratio(double FC_ratio) {
       first_pass_flag = false;
     }
   }
-  
+
+  if (FC_size != 0) {
+    chunks.clear();
+    assert(CHUNK_RATIO > 0);
+    int chunkSize = std::ceil(FC_size*CHUNK_RATIO);
+    int counter = 0;
+    std::unique_lock<ListMutex> lock(m_listMutex);
+    ListNode* curNode = m_fast_head.m_next;
+    ListNode* prevNode = curNode;
+    while(curNode != &m_fast_tail) {
+      if(counter % chunkSize == 0 && counter != 0) {
+        chunks.push_back(prevNode);
+        prevNode = curNode;
+      }
+      counter += 1;
+      curNode = curNode->m_next;
+    }
+    if (prevNode != &m_fast_tail) {
+      chunks.push_back(prevNode);
+    }
+  }
   
   if(fail_count > 0)
     printf("fast hash insert num: %lu, fail count: %lu, m_size: %ld (FC_ratio: %.2lf)\n", 
@@ -923,18 +947,28 @@ inline void FIFO_FHCache<TKey, TValue, THash>::pushAfter(ListNode* nodeBefore, L
 }
 
 template <class TKey, class TValue, class THash>
-inline void FIFO_FHCache<TKey, TValue, THash>::meltFrozenListNodeToDynamicListNode() {
+inline void FIFO_FHCache<TKey, TValue, THash>::melt() {
   if(fast_hash_ready) {
+    if (chunks.size() == 0) return;
+    ListNode* chunkNodeHead = chunks.back();
+    chunks.pop_back();
     std::unique_lock<ListMutex> lock(m_listMutex);
-    if(m_fast_tail == nullptr) {
-      printf("m_fast_tail was set to nullptr!\n");
-    }
     if(m_fast_tail.m_prev == &m_fast_head) return;
-    ListNode* nodeToMove = m_fast_tail.m_prev;
-    nodeToMove->m_prev->m_next = &m_fast_tail;
-    m_fast_tail.m_prev = nodeToMove->m_prev;
-    pushFront(nodeToMove);
-    m_fasthash->erase(nodeToMove->m_key);
+    ListNode* lastNode = m_fast_tail.m_prev;
+    ListNode* nextNode = m_head.m_next;
+
+    chunkNodeHead->m_prev->m_next = &m_fast_tail;
+    m_fast_tail.m_prev = chunkNodeHead->m_prev;
+
+    m_head.m_next = chunkNodeHead;
+    chunkNodeHead->m_prev = &m_head;
+    lastNode->m_next = nextNode;
+    nextNode->m_prev = lastNode;
+
+    while(chunkNodeHead != lastNode) {
+      m_fasthash->remove_key(chunkNodeHead->m_key);
+      chunkNodeHead = chunkNodeHead->m_next;
+    }
   }
 }
 
@@ -944,7 +978,6 @@ bool FIFO_FHCache<TKey, TValue, THash>::evict() {
 #ifdef HANDLE_WRITE
   std::unique_lock<ListMutex> lock(m_listMutex);
   ListNode* moribund = m_tail.m_prev;
-  
   // Delete all the tombs for write in the end of list
   while(moribund->m_key == TOMB_KEY) {
     delink(moribund);

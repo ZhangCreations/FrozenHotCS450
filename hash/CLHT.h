@@ -40,6 +40,10 @@ namespace FastHash
 	   return true;
 	};
 
+	void remove_key(TKey idx) {
+		clht_remove(m_hashtable, (clht_addr_t)idx);
+	}
+
 	virtual void clear() {
 	    clht_clear(m_hashtable->ht);
 	};
