@@ -171,9 +171,9 @@ struct ConcurrentScalableCache {
   bool stop_sample_stat = true;
 
   /**/
-  int exponentCap = 0;
-  int exponentialBackoffRemaining = 0;
-  double previousMissRatio = 0; 
+  int exponent_cap = 0;
+  int exponential_backoff_remaining = 0;
+  double previous_baseline_performance_with_threshold = 0; 
 
 private:
   /**
@@ -684,11 +684,6 @@ WAIT_STABLE:
   /* become aware of DC latency (hit lat) and DC miss latency + disk latency (miss lat) */
   PrintStepLat(DC_hit_lat, miss_lat);
 
-  if(exponentialBackoffRemaining > 0){
-    exponentialBackoffRemaining -= 1;
-    goto WAIT_STABLE;
-  }
-
   // first do 100% FC
   for(size_t i = 0; i < m_numShards; i++){
     m_shards[i]->construct_tier();
@@ -757,15 +752,6 @@ WAIT_STABLE:
     }
   }
 
-  if(best_option_tMiss < previousMissRatio){
-    exponentCap = 0;
-    exponentialBackoffRemaining = 0;
-  } else {
-    exponentCap == 0 ? 1 : exponentCap * 2;
-    exponentialBackoffRemaining = exponentCap;
-  }
-  previousMissRatio = best_option_tMiss
-  
   // Compare best "partially" frozen [0, 100%) one with 100% Frozen
   if(best_avg > Frozen_Avg){
     printf("(Update) best avg: %.3lf us, best size: %.3lf\n",
@@ -811,6 +797,12 @@ WAIT_STABLE:
 
   // Construct the FH
 CONSTRUCT:
+
+  if(exponential_backoff_remaining > 0){
+    exponential_backoff_remaining -= 1;
+    goto FROZEN_RUN;
+  }
+
   auto start_construct_time = SSDLOGGING_TIME_NOW;
   double baseline_metrics[80];
   std::set<int> fail_list;
@@ -958,7 +950,16 @@ CONSTRUCT:
 
   stop_sample_stat = true; // disable req_latency_[] in client logic
                            // this helps us do less job
+  if(baseline_performance_with_threshold < previous_baseline_performance_with_threshold * 0.98){
+    exponent_cap = 0;
+    exponential_backoff_remaining = 0;
+  } else {
+    exponent_cap == 0 ? 1 : exponent_cap * 2;
+    exponential_backoff_remaining = exponent_cap;
+  }
+  previous_baseline_performance_with_threshold = baseline_performance_with_threshold
   
+FROZEN_RUN:
   // Start of Frozen run after construction, and monitor it
   auto start_query_stage = SSDLOGGING_TIME_NOW;
   printf("\n* start frozen *\n");
@@ -969,7 +970,7 @@ CONSTRUCT:
   bool first_flag = true;
   size_t total_step = 0;
   size_t current_step = 0;
-  
+
   while(!should_stop) {
     do{
       usleep(check_time);
