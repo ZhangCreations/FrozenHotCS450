@@ -94,13 +94,13 @@ MSR_size_ratio = {
     0.1,
 }
 cache_types = [
-    "LRU_FH",
+    #"LRU_FH",
     # "LRU",
 
     "FIFO_FH",
     # "FIFO",
 
-    "LFU_FH",
+    #"LFU_FH",
     # "LFU",
 
     # "Redis_LRU",

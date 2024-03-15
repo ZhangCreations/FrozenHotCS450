@@ -318,6 +318,8 @@ public:
         return true;
     }
 
+    virtual void melt_chunk() override {}
+
     virtual bool insert(const TKey& key, const TValue& value) override {
         lru_object* node = new lru_object(key);
         HashMapAccessor hashAccessor;

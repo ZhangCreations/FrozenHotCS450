@@ -220,7 +220,7 @@ class FIFO_FHCache : public FHCacheAPI<TKey, TValue, THash> {
   /**
    * Removes the tailmost chunk from the frozen list into the dynamic list
    */
-  void melt();
+  void melt_chunk();
 
 
   /**
@@ -947,12 +947,12 @@ inline void FIFO_FHCache<TKey, TValue, THash>::pushAfter(ListNode* nodeBefore, L
 }
 
 template <class TKey, class TValue, class THash>
-inline void FIFO_FHCache<TKey, TValue, THash>::melt() {
+inline void FIFO_FHCache<TKey, TValue, THash>::melt_chunk() {
   if(fast_hash_ready) {
+    std::unique_lock<ListMutex> lock(m_listMutex);
     if (chunks.size() == 0) return;
     ListNode* chunkNodeHead = chunks.back();
     chunks.pop_back();
-    std::unique_lock<ListMutex> lock(m_listMutex);
     if(m_fast_tail.m_prev == &m_fast_head) return;
     ListNode* lastNode = m_fast_tail.m_prev;
     ListNode* nextNode = m_head.m_next;

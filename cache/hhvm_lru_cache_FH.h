@@ -171,6 +171,9 @@ class LRU_FHCache : public FHCacheAPI<TKey, TValue, THash> {
    */
   virtual bool insert(const TKey& key, const TValue& value) override;
 
+
+   virtual void melt_chunk() override;
+
   /**
    * Clear the container. NOT THREAD SAFE -- do not use while other threads
    * are accessing the container.
@@ -672,6 +675,11 @@ bool LRU_FHCache<TKey, TValue, THash>::get_curve(bool& should_stop) {
 //   //std::unique_lock<ListMutex> lock(m_listMutex);
 //   tier_no_insert = flag;
 // }
+
+template <class TKey, class TValue, class THash>
+ void  LRU_FHCache<TKey, TValue, THash>::melt_chunk() {
+  return;
+ }
 
 template <class TKey, class TValue, class THash>
 bool LRU_FHCache<TKey, TValue, THash>::insert(const TKey& key,

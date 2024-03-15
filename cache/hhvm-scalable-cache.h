@@ -1045,7 +1045,7 @@ CONSTRUCT:
     if (performance_depletion_fraction > performance_depletion_threshold) {
       melted_chunks_count++;
       for(size_t i = 0; i < m_numShards; i++) {
-        // m_shards[i]->melt_chunk();
+        m_shards[i]->melt_chunk();
       }
     }
     fflush(stdout);

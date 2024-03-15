@@ -163,6 +163,8 @@ public:
         node->m_prev = new_node;
     }
 
+    virtual void melt_chunk() override {}
+
     virtual bool find(TValue& ac, const TKey& key) override {
         //HashMapConstAccessor hashAccessor;
         HashMapAccessor hashAccessor; // TODO: replace to const and use replace
