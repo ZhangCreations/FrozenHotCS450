@@ -954,7 +954,7 @@ CONSTRUCT:
     exponent_cap = 0;
     exponential_backoff_remaining = 0;
   } else {
-    exponent_cap == 0 ? 1 : exponent_cap * 2;
+    exponent_cap = exponent_cap == 0 ? 1 : exponent_cap * 2;
     exponential_backoff_remaining = exponent_cap;
   }
   previous_baseline_performance_with_threshold = baseline_performance_with_threshold
