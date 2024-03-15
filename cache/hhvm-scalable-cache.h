@@ -751,7 +751,7 @@ WAIT_STABLE:
         best_avg, best_size, tFC_hit_, best_option_tMiss);
     }
   }
-  
+
   // Compare best "partially" frozen [0, 100%) one with 100% Frozen
   if(best_avg > Frozen_Avg){
     printf("(Update) best avg: %.3lf us, best size: %.3lf\n",
@@ -970,7 +970,7 @@ FROZEN_RUN:
   bool first_flag = true;
   size_t total_step = 0;
   size_t current_step = 0;
-
+  
   while(!should_stop) {
     do{
       usleep(check_time);
