@@ -226,6 +226,7 @@ private:
   int MIN_REFRESH_PERIOD = 10;
   int MAX_REFRESH_PERIOD = 100;
   int REFRESH_THRESHOLD_MARGIN = 0.02;
+  int ADDITIVE_REFRESH_PERIOD_FACTOR = 10;
 
   double previous_baseline_performance_with_threshold = 0;
 
@@ -823,15 +824,6 @@ CONSTRUCT:
   printf("FH compare with baseline metric: %.3lf\n", baseline_performance_for_query);
   printf("FH compare with baseline metric with threshold: %.3lf\n", baseline_performance_with_threshold);
 
-  // If new threshold has more than 2% lower latency than previous threshold, reset refresh period to min
-  // Otherwise, 2x the refresh period up to the max, except on first construct (no prev threshold)
-  if (baseline_performance_with_threshold < previous_baseline_performance_with_threshold * (1 - REFRESH_THRESHOLD_MARGIN)) {
-    FROZEN_THRESHOLD = MIN_REFRESH_PERIOD;
-  } else if (FROZEN_THRESHOLD < MAX_REFRESH_PERIOD && previous_baseline_performance_with_threshold != 0) {
-    FROZEN_THRESHOLD = std::min(FROZEN_THRESHOLD * 2, MAX_REFRESH_PERIOD);
-  }
-  previous_baseline_performance_with_threshold = baseline_performance_with_threshold;
-
   stop_sample_stat = false; // enable req_latency_[]
 
   /* req_latency_[] array is used to store the latency of each shard */
@@ -951,6 +943,19 @@ CONSTRUCT:
     printf("fail %ld shard, construct fully succeed\n", fail_list.size());
   else
     printf("fail %ld shard\n", fail_list.size());
+
+  // If new threshold has more than 2% lower latency than previous threshold, reset refresh period to min
+  // Otherwise, increase the refresh period up to the max, except on first construct (no prev threshold)
+  printf("baseline metric with threshold: %.3lf\n", baseline_performance_with_threshold);
+  printf("previous baseline metric with threshold: %.3lf\n", previous_baseline_performance_with_threshold);
+  if (baseline_performance_with_threshold < previous_baseline_performance_with_threshold * (1 - REFRESH_THRESHOLD_MARGIN)) {
+    FROZEN_THRESHOLD = MIN_REFRESH_PERIOD;
+  } else if (FROZEN_THRESHOLD < MAX_REFRESH_PERIOD && previous_baseline_performance_with_threshold != 0) {
+    FROZEN_THRESHOLD = std::min(FROZEN_THRESHOLD * 2, MAX_REFRESH_PERIOD);
+    // FROZEN_THRESHOLD = std::min(FROZEN_THRESHOLD + ADDITIVE_REFRESH_PERIOD_FACTOR, MAX_REFRESH_PERIOD);
+  }
+  previous_baseline_performance_with_threshold = baseline_performance_with_threshold;
+  printf("Frozen_Threshold: %d\n", FROZEN_THRESHOLD);
   
   printf("\n* end construct *\n"); // End of the FH construction
 
