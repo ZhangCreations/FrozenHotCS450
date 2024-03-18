@@ -44,6 +44,8 @@ namespace Cache
 
         virtual bool insert(const TKey& key, const TValue& value) override = 0;
 
+        virtual void melt_chunk() override = 0;
+
         virtual void delete_key(const TKey& key) override {}
 
         virtual double _get_miss_ratio(size_t& total_access) override {

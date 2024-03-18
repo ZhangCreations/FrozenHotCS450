@@ -135,7 +135,7 @@ class FIFO_FHCache : public FHCacheAPI<TKey, TValue, THash> {
   /**
    * Create a container with a given maximum size
    */
-  explicit FIFO_FHCache(size_t maxSize);
+  explicit FIFO_FHCache(size_t maxSize, double chunkRatio = 0.2);
 
   FIFO_FHCache(const FIFO_FHCache& other) = delete;
   FIFO_FHCache& operator=(const FIFO_FHCache&) = delete;
@@ -217,6 +217,11 @@ class FIFO_FHCache : public FHCacheAPI<TKey, TValue, THash> {
 
   void pushAfter(ListNode* nodeBefore, ListNode* nodeAfter);
 
+  /**
+   * Removes the tailmost chunk from the frozen list into the dynamic list
+   */
+  void melt_chunk();
+
 
   /**
    * Evict the least-recently used item from the container. This function does
@@ -265,6 +270,9 @@ class FIFO_FHCache : public FHCacheAPI<TKey, TValue, THash> {
   ListNode m_fast_head;
   ListNode m_fast_tail;
   ListNode *m_marker = nullptr;
+
+  std::vector<ListNode*> chunks;
+  const double CHUNK_RATIO;
 };
 
 template <class TKey, class TValue, class THash>
@@ -272,12 +280,13 @@ typename FIFO_FHCache<TKey, TValue, THash>::ListNode* const
     FIFO_FHCache<TKey, TValue, THash>::OutOfListMarker = (ListNode*)-1;
 
 template <class TKey, class TValue, class THash>
-FIFO_FHCache<TKey, TValue, THash>::FIFO_FHCache(size_t maxSize)
+FIFO_FHCache<TKey, TValue, THash>::FIFO_FHCache(size_t maxSize, double chunkRatio)
     : m_maxSize(maxSize),
       m_size(0),
       m_map(std::thread::hardware_concurrency() *
-            4)  // it will automatically grow
-{
+            4),  // it will automatically grow
+      CHUNK_RATIO(chunkRatio)
+      {
   m_head.m_prev = nullptr;
   m_head.m_next = &m_tail;
   m_tail.m_prev = &m_head;
@@ -294,11 +303,13 @@ FIFO_FHCache<TKey, TValue, THash>::FIFO_FHCache(size_t maxSize)
 template <class TKey, class TValue, class THash>
 bool FIFO_FHCache<TKey, TValue, THash>::construct_ratio(double FC_ratio) {
   // Check valid ratio
-  assert(FC_ratio <= 1 && FC_ratio >=0);
+  assert(FC_ratio <= 1 && FC_ratio > 0);
   
+  std::unique_lock<ListMutex> upperLock(m_listMutex);
   // Check that Frozen LinkedList is empty (previously in DC mode)
   assert(m_fast_head.m_next == &m_fast_tail);
   assert(m_fast_tail.m_prev == &m_fast_head);
+  upperLock.unlock();
   
   // prepare eviction counter for later use
   // TODO @ Ziyue: when will it not 0?
@@ -323,8 +334,18 @@ bool FIFO_FHCache<TKey, TValue, THash>::construct_ratio(double FC_ratio) {
   ListNode* temp_node = m_fast_head.m_next;
   ListNode* delete_temp;
   HashMapConstAccessor temp_hashAccessor;
+
+  // Chunk management logic
+  chunks.clear();
+  assert(CHUNK_RATIO > 0);
+  int chunkSize = std::ceil(FC_size*CHUNK_RATIO);
+  bool insertNextNodeInChunk = false;
   
   while(temp_node != &m_fast_tail){
+    if (count % chunkSize == 0) {
+      insertNextNodeInChunk = true;
+    }
+
     count++;
     auto eviction_count = eviction_counter.load();
     
@@ -347,10 +368,16 @@ bool FIFO_FHCache<TKey, TValue, THash>::construct_ratio(double FC_ratio) {
     
     // Node exists
     m_fasthash->insert(temp_node->m_key, temp_hashAccessor->second.m_value);
+    if (insertNextNodeInChunk) {
+      std::unique_lock<ListMutex> lock(m_listMutex);
+      chunks.push_back(temp_node);
+      lock.unlock();
+      insertNextNodeInChunk = false;
+    }
     temp_node = temp_node->m_next;
 
     // cutoff FC list, in two cases
-    if(count > FC_size - FC_RELAXATION && first_pass_flag == true){
+    if(count > FC_size - FC_RELAXATION && first_pass_flag == true){ // Transfers segment from DC to FC
       // Lock the whole list
       std::unique_lock<ListMutex> lock(m_listMutex);
       
@@ -368,7 +395,7 @@ bool FIFO_FHCache<TKey, TValue, THash>::construct_ratio(double FC_ratio) {
       // Unlock and finish
       lock.unlock();
       break;
-    } else if(eviction_count > DC_size - FC_RELAXATION && first_pass_flag == true) {
+    } else if(eviction_count > DC_size - FC_RELAXATION && first_pass_flag == true) { // Transfers entire DC to FC
       // Lock the whole list
       std::unique_lock<ListMutex> lock(m_listMutex);
       
@@ -384,7 +411,6 @@ bool FIFO_FHCache<TKey, TValue, THash>::construct_ratio(double FC_ratio) {
       first_pass_flag = false;
     }
   }
-  
   
   if(fail_count > 0)
     printf("fast hash insert num: %lu, fail count: %lu, m_size: %ld (FC_ratio: %.2lf)\n", 
@@ -526,6 +552,8 @@ void FIFO_FHCache<TKey, TValue, THash>::deconstruct() {
   /* if empty, need to point to each other
    * if not, need to not point to each other
    */
+  // Lock the whole list
+  std::unique_lock<ListMutex> lock(m_listMutex);
   assert(!((m_fast_head.m_next == &m_fast_tail) ^ (m_fast_tail.m_prev == &m_fast_head)));
   
   // If the cache was DC already, do nothing
@@ -535,8 +563,6 @@ void FIFO_FHCache<TKey, TValue, THash>::deconstruct() {
     return;
   }
 
-  // Lock the whole list
-  std::unique_lock<ListMutex> lock(m_listMutex);
   ListNode* node = m_head.m_next;
   
   // Put the frozen part at the start of the linkedlist (i.e. the Most recently used)
@@ -915,13 +941,38 @@ inline void FIFO_FHCache<TKey, TValue, THash>::pushAfter(ListNode* nodeBefore, L
   nodeBefore->m_next = nodeAfter;
 }
 
+template <class TKey, class TValue, class THash>
+inline void FIFO_FHCache<TKey, TValue, THash>::melt_chunk() {
+  if(fast_hash_ready) {
+    std::unique_lock<ListMutex> lock(m_listMutex);
+    if (chunks.size() == 0) return;
+    ListNode* chunkNodeHead = chunks.back();
+    chunks.pop_back();
+    if(m_fast_tail.m_prev == &m_fast_head) return;
+    ListNode* lastNode = m_fast_tail.m_prev;
+    ListNode* nextNode = m_head.m_next;
+
+    chunkNodeHead->m_prev->m_next = &m_fast_tail;
+    m_fast_tail.m_prev = chunkNodeHead->m_prev;
+
+    m_head.m_next = chunkNodeHead;
+    chunkNodeHead->m_prev = &m_head;
+    lastNode->m_next = nextNode;
+    nextNode->m_prev = lastNode;
+
+    while(chunkNodeHead != lastNode) {
+      m_fasthash->remove_key(chunkNodeHead->m_key);
+      chunkNodeHead = chunkNodeHead->m_next;
+    }
+  }
+}
+
 // Eviction logic
 template <class TKey, class TValue, class THash>
 bool FIFO_FHCache<TKey, TValue, THash>::evict() {
 #ifdef HANDLE_WRITE
   std::unique_lock<ListMutex> lock(m_listMutex);
   ListNode* moribund = m_tail.m_prev;
-  
   // Delete all the tombs for write in the end of list
   while(moribund->m_key == TOMB_KEY) {
     delink(moribund);
@@ -1010,9 +1061,9 @@ void FIFO_FHCache<TKey, TValue, THash>::delete_key(const TKey& key) {
     }
   } // Found in the frozen part
   else if ((tier_ready || fast_hash_ready) && m_fasthash->find(key, ac) && (ac != nullptr)) {
+    std::unique_lock<ListMutex> lock(m_listMutex);
     node->m_key = TOMB_KEY; // Mark it as dead
     
-    // std::unique_lock<ListMutex> lock(m_listMutex);
     // m_fasthash.set_key_value(key, nullptr);
     // fast_hash_invalid++;
     // lock.unlock();

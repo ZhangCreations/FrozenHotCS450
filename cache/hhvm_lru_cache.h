@@ -150,6 +150,8 @@ class LRUCache : public BaseCacheAPI<TKey, TValue, THash> {
    */
   virtual bool insert(const TKey& key, const TValue& value) override;
 
+  virtual void melt_chunk() override;
+
   /**
    * Clear the container. NOT THREAD SAFE -- do not use while other threads
    * are accessing the container.
@@ -277,6 +279,9 @@ bool LRUCache<TKey, TValue, THash>::find(TValue& ac,
     LRUCache::hit_num++;
   return true;
 }
+
+template <class TKey, class TValue, class THash>
+void LRUCache<TKey, TValue, THash>::melt_chunk() {}
 
 template <class TKey, class TValue, class THash>
 bool LRUCache<TKey, TValue, THash>::insert(const TKey& key,

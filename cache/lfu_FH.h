@@ -502,6 +502,8 @@ public:
         return false;
         
     }
+
+    virtual void melt_chunk() override {}
     
     virtual bool insert(const TKey& key, const TValue& value) override {
         bool stat_yes = LFU_FHCache::sample_generator();
