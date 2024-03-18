@@ -303,7 +303,7 @@ FIFO_FHCache<TKey, TValue, THash>::FIFO_FHCache(size_t maxSize, double chunkRati
 template <class TKey, class TValue, class THash>
 bool FIFO_FHCache<TKey, TValue, THash>::construct_ratio(double FC_ratio) {
   // Check valid ratio
-  assert(FC_ratio <= 1 && FC_ratio >=0);
+  assert(FC_ratio <= 1 && FC_ratio > 0);
   
   std::unique_lock<ListMutex> upperLock(m_listMutex);
   // Check that Frozen LinkedList is empty (previously in DC mode)
