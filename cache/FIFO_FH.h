@@ -28,6 +28,8 @@
 #include <iostream>
 #include <string>
 #include <vector>
+#include <unordered_map>
+
 // stat
 #define FH_STAT
 #define HANDLE_WRITE
@@ -257,6 +259,7 @@ class FIFO_FHCache : public FHCacheAPI<TKey, TValue, THash> {
   ListNode m_tail;
   typedef std::mutex ListMutex;
   ListMutex m_listMutex;
+  ListMutex m_mapMutex;
 
   bool fast_hash_ready = false;
   bool fast_hash_construct = false;
@@ -273,6 +276,9 @@ class FIFO_FHCache : public FHCacheAPI<TKey, TValue, THash> {
 
   std::vector<ListNode*> chunks;
   const double CHUNK_RATIO;
+
+  std::unordered_map<TKey, int> chunkMapper;
+  std::atomic<int> globalCounter; 
 };
 
 template <class TKey, class TValue, class THash>
@@ -340,10 +346,15 @@ bool FIFO_FHCache<TKey, TValue, THash>::construct_ratio(double FC_ratio) {
   assert(CHUNK_RATIO > 0);
   int chunkSize = std::ceil(FC_size*CHUNK_RATIO);
   bool insertNextNodeInChunk = false;
-  
+  globalCounter = 0;
+  int chunkCounter = 0;
+  m_mapMutex.lock();
+  chunkMapper.clear();
+  m_mapMutex.unlock();
   while(temp_node != &m_fast_tail){
     if (count % chunkSize == 0) {
       insertNextNodeInChunk = true;
+      chunkCounter += 1;
     }
 
     count++;
@@ -368,6 +379,9 @@ bool FIFO_FHCache<TKey, TValue, THash>::construct_ratio(double FC_ratio) {
     
     // Node exists
     m_fasthash->insert(temp_node->m_key, temp_hashAccessor->second.m_value);
+    m_mapMutex.lock();
+    chunkMapper[temp_node->m_key] = chunkCounter;
+    m_mapMutex.unlock();
     if (insertNextNodeInChunk) {
       std::unique_lock<ListMutex> lock(m_listMutex);
       chunks.push_back(temp_node);
@@ -606,12 +620,13 @@ bool FIFO_FHCache<TKey, TValue, THash>::find(TValue& ac,
     // we can re-check this and remove it if possible
 
     // Generally when we found the thing in frozen cache
-    if(m_fasthash->find(key, ac) && (ac != nullptr))
+    std::unique_lock<ListMutex> lockMap(m_mapMutex);
+    if(m_fasthash->find(key, ac) && (ac != nullptr) && (chunkMapper[key] > globalCounter))
 #else
     if(m_fasthash->find(key, ac))
 #endif
     {
-
+      lockMap.unlock();
 #ifdef FH_STAT
       if(stat_yes) {
         FIFO_FHCache::fast_find_hit++;
@@ -959,11 +974,7 @@ inline void FIFO_FHCache<TKey, TValue, THash>::melt_chunk() {
     chunkNodeHead->m_prev = &m_head;
     lastNode->m_next = nextNode;
     nextNode->m_prev = lastNode;
-
-    while(chunkNodeHead != lastNode) {
-      m_fasthash->remove_key(chunkNodeHead->m_key);
-      chunkNodeHead = chunkNodeHead->m_next;
-    }
+    globalCounter += 1;
   }
 }
 
