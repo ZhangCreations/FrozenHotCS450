@@ -334,8 +334,18 @@ bool FIFO_FHCache<TKey, TValue, THash>::construct_ratio(double FC_ratio) {
   ListNode* temp_node = m_fast_head.m_next;
   ListNode* delete_temp;
   HashMapConstAccessor temp_hashAccessor;
+
+  // Chunk management logic
+  chunks.clear();
+  assert(CHUNK_RATIO > 0);
+  int chunkSize = std::ceil(FC_size*CHUNK_RATIO);
+  bool insertNextNodeInChunk = false;
   
   while(temp_node != &m_fast_tail){
+    if (count % chunkSize == 0) {
+      insertNextNodeInChunk = true;
+    }
+
     count++;
     auto eviction_count = eviction_counter.load();
     
@@ -358,10 +368,16 @@ bool FIFO_FHCache<TKey, TValue, THash>::construct_ratio(double FC_ratio) {
     
     // Node exists
     m_fasthash->insert(temp_node->m_key, temp_hashAccessor->second.m_value);
+    if (insertNextNodeInChunk) {
+      std::unique_lock<ListMutex> lock(m_listMutex);
+      chunks.push_back(temp_node);
+      lock.unlock();
+      insertNextNodeInChunk = false;
+    }
     temp_node = temp_node->m_next;
 
     // cutoff FC list, in two cases
-    if(count > FC_size - FC_RELAXATION && first_pass_flag == true){
+    if(count > FC_size - FC_RELAXATION && first_pass_flag == true){ // Transfers segment from DC to FC
       // Lock the whole list
       std::unique_lock<ListMutex> lock(m_listMutex);
       
@@ -379,7 +395,7 @@ bool FIFO_FHCache<TKey, TValue, THash>::construct_ratio(double FC_ratio) {
       // Unlock and finish
       lock.unlock();
       break;
-    } else if(eviction_count > DC_size - FC_RELAXATION && first_pass_flag == true) {
+    } else if(eviction_count > DC_size - FC_RELAXATION && first_pass_flag == true) { // Transfers entire DC to FC
       // Lock the whole list
       std::unique_lock<ListMutex> lock(m_listMutex);
       
@@ -393,27 +409,6 @@ bool FIFO_FHCache<TKey, TValue, THash>::construct_ratio(double FC_ratio) {
       node->m_prev = &m_fast_head;
       lock.unlock();
       first_pass_flag = false;
-    }
-  }
-
-  if (FC_size != 0) {
-    chunks.clear();
-    assert(CHUNK_RATIO > 0);
-    int chunkSize = std::ceil(FC_size*CHUNK_RATIO);
-    int counter = 0;
-    std::unique_lock<ListMutex> lock(m_listMutex);
-    ListNode* curNode = m_fast_head.m_next;
-    ListNode* prevNode = curNode;
-    while(curNode != &m_fast_tail) {
-      if(counter % chunkSize == 0 && counter != 0) {
-        chunks.push_back(prevNode);
-        prevNode = curNode;
-      }
-      counter += 1;
-      curNode = curNode->m_next;
-    }
-    if (prevNode != &m_fast_tail) {
-      chunks.push_back(prevNode);
     }
   }
   
