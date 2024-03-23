@@ -465,10 +465,10 @@ bool FIFO_FHCache<TKey, TValue, THash>::construct_tier() {
   ListNode* delete_temp;
   HashMapConstAccessor temp_hashAccessor;
 
-  // int chunkSize = std::ceil(m_size.load() * CHUNK_RATIO);
-  // int chunkCounter = 0;
-  // chunkMapper.clear();
-  // chunks.clear();
+  int chunkSize = std::ceil(m_size.load() * CHUNK_RATIO);
+  int chunkCounter = 0;
+  chunkMapper.clear();
+  chunks.clear();
   
   while(temp_node != &m_fast_tail){
 #ifdef HANDLE_WRITE
@@ -510,21 +510,20 @@ bool FIFO_FHCache<TKey, TValue, THash>::construct_tier() {
     }
 #endif
    
-   /*
-  if (count % chunkSize == 0) {
-      chunkCounter += 1;
-      std::unique_lock<ListMutex> lock(m_listMutex);
-      chunks.push_back(temp_node);
-      lock.unlock();
-    }
-  chunkMapper[temp_node->m_key] = chunkCounter;
-    */
+   
+    if (count % chunkSize == 0) {
+        chunkCounter += 1;
+        std::unique_lock<ListMutex> lock(m_listMutex);
+        chunks.push_back(temp_node);
+      }
+    chunkMapper[temp_node->m_key] = chunkCounter;
+  
     // Insert the valid node to Frozen
     m_fasthash->insert(temp_node->m_key, temp_hashAccessor->second.m_value);
     count++;
     temp_node = temp_node->m_next;
   }
-  // chunkGlobalCounter = chunkCounter + 1;
+  chunkGlobalCounter = chunkCounter + 1;
   printf("fast hash insert num: %d, m_size: %ld (FC_ratio: %.2lf)\n", 
       count, m_size.load(), count*1.0/m_size.load());
   tier_ready = true;
