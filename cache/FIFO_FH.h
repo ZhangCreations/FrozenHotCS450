@@ -630,7 +630,7 @@ bool FIFO_FHCache<TKey, TValue, THash>::find(TValue& ac,
     // Generally when we found the thing in frozen cache
     if((chunkMapper.find(key) != chunkMapper.end()) && (chunkMapper[key] < chunkGlobalCounter) && m_fasthash->find(key, ac) && (ac != nullptr))
 #else
-    if(chunkMapper.find(key) && (chunkMapper[key] < chunkGlobalCounter) && m_fasthash->find(key, ac))
+    if((chunkMapper.find(key) != chunkMapper.end()) && (chunkMapper[key] < chunkGlobalCounter) && m_fasthash->find(key, ac))
 #endif
     {
 #ifdef FH_STAT
