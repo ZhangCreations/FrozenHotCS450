@@ -67,19 +67,19 @@ MSR_list = {
 }
 
 workload_types = [
-    "Twitter",
-    # "Zipf",
+    # "Twitter",
+    "Zipf",
     # "MSR"
 ]
 seg = [
     16
 ]
 thread_num = [
-    # 1,
+    1,
     # 20,
     # 40,
     # 60,
-    72,
+    # 72,
 ]
 
 # this can change in different machine
@@ -93,14 +93,14 @@ MSR_size_ratio = {
     0.1,
 }
 cache_types = [
-    "LRU_FH",
-    "LRU",
+    # "LRU_FH",
+    # "LRU",
 
     "FIFO_FH",
-    "FIFO",
+    # "FIFO",
 
-    "LFU_FH",
-    "LFU",
+    # "LFU_FH",
+    # "LFU",
 
     # "Redis_LRU",
     # "StrictLRU",
@@ -115,9 +115,9 @@ disk_lat = [
 ]
 
 FH_rebuild_freq = [
-    100, # only for lifetime factor
+    # 100, # only for lifetime factor
     20, # by default (most experiments)
-    10, # only for lifetime factor
+    # 10, # only for lifetime factor
 ]
 
 for thread in thread_num:
@@ -149,7 +149,7 @@ for thread in thread_num:
                                 request_num = Zipf_size_ratio[ratio] * 1000000 * thread_ # rewrite
                                 for zipf_const in zipf:
                                     output_file = path_2 + str(zipf_const) + "_" + str(ratio) + "size_" + cache_type + "_rebuild" + str(freq) + ".txt"
-                                    command = "./build/test_trace " + str(thread) + " " + str(cache_size) \
+                                    command = "../../build/test_trace " + str(thread) + " " + str(cache_size) \
                                             + " " + str(request_num) + " " + str(shard) + " " \
                                             + workload_type + " " + str(zipf_const)+ " " + cache_type \
                                             + " " + str(lat) + " " + str(freq) + " > " + output_file

@@ -1,0 +1,4 @@
+trace,thread,algo_type,disk lat,refresh ratio,cachesize,thput-b,total miss ratio,hit latency
+Zipf,1,LRU FH,5,20,0.5,,,
+Zipf,1,LFU FH,5,20,0.5,390613.6558009276,0.267527,0.309
+Zipf,1,FIFO FH,5,20,0.5,159013.6172852432,0.355606,0.239
