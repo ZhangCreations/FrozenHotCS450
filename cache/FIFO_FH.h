@@ -467,10 +467,15 @@ bool FIFO_FHCache<TKey, TValue, THash>::construct_tier() {
 
   int chunkSize = std::ceil(m_size.load() * CHUNK_RATIO);
   int chunkCounter = 0;
+  bool insertNextNodeInChunk = false;
   chunkMapper.clear();
   chunks.clear();
   
   while(temp_node != &m_fast_tail){
+    if (count % chunkSize == 0) {
+      insertNextNodeInChunk = true;
+      chunkCounter += 1;
+    }
 #ifdef HANDLE_WRITE
     /*
      * If the node key is tomb, clean tomb node; 
@@ -509,17 +514,17 @@ bool FIFO_FHCache<TKey, TValue, THash>::construct_tier() {
       continue;
     }
 #endif
-   
-   
-    if (count % chunkSize == 0) {
-        chunkCounter += 1;
-        std::unique_lock<ListMutex> lock(m_listMutex);
-        chunks.push_back(temp_node);
-      }
-    chunkMapper[temp_node->m_key] = chunkCounter;
-  
+
     // Insert the valid node to Frozen
     m_fasthash->insert(temp_node->m_key, temp_hashAccessor->second.m_value);
+    chunkMapper[temp_node->m_key] = chunkCounter;
+    if (insertNextNodeInChunk) {
+      std::unique_lock<ListMutex> lock(m_listMutex);
+      chunks.push_back(temp_node);
+      lock.unlock();
+      insertNextNodeInChunk = false;
+    }
+    
     count++;
     temp_node = temp_node->m_next;
   }
@@ -962,25 +967,24 @@ inline void FIFO_FHCache<TKey, TValue, THash>::pushAfter(ListNode* nodeBefore, L
 
 template <class TKey, class TValue, class THash>
 inline void FIFO_FHCache<TKey, TValue, THash>::melt_chunk() {
-  if(fast_hash_ready) {
-    std::unique_lock<ListMutex> lock(m_listMutex);
-    if (chunks.size() == 0) return;
-    ListNode* chunkNodeHead = chunks.back();
-    chunks.pop_back();
-    if(m_fast_tail.m_prev == &m_fast_head) return;
-    ListNode* lastNode = m_fast_tail.m_prev;
-    ListNode* nextNode = m_head.m_next;
+  if(!fast_hash_ready) return;
+  std::unique_lock<ListMutex> lock(m_listMutex);
+  if (chunks.size() == 0) return;
+  ListNode* chunkNodeHead = chunks.back();
+  chunks.pop_back();
+  if(m_fast_tail.m_prev == &m_fast_head) return;
+  ListNode* lastNode = m_fast_tail.m_prev;
+  ListNode* nextNode = m_head.m_next;
 
-    chunkNodeHead->m_prev->m_next = &m_fast_tail;
-    m_fast_tail.m_prev = chunkNodeHead->m_prev;
+  chunkNodeHead->m_prev->m_next = &m_fast_tail;
+  m_fast_tail.m_prev = chunkNodeHead->m_prev;
 
-    m_head.m_next = chunkNodeHead;
-    chunkNodeHead->m_prev = &m_head;
-    lastNode->m_next = nextNode;
-    nextNode->m_prev = lastNode;
-    lock.unlock();
-    chunkGlobalCounter -= 1;
-  }
+  m_head.m_next = chunkNodeHead;
+  chunkNodeHead->m_prev = &m_head;
+  lastNode->m_next = nextNode;
+  nextNode->m_prev = lastNode;
+  lock.unlock();
+  chunkGlobalCounter -= 1;
 }
 
 // Eviction logic
