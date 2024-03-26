@@ -652,7 +652,7 @@ bool FIFO_FHCache<TKey, TValue, THash>::find(TValue& ac,
   }
 
   // Now we try to find in DC if data not in FC
-  if (!m_map.find(hashAccessor, key)) {
+  if (!m_map.find(hashAccessor, key) || hashAccessor->second.m_listNode->m_key == TOMB_KEY) {
 #ifdef FH_STAT
     if(stat_yes) {
       FIFO_FHCache::tbb_find_miss++;
@@ -661,7 +661,6 @@ bool FIFO_FHCache<TKey, TValue, THash>::find(TValue& ac,
     // Not found in DC also (cache miss)
     return false;
   }
-  
   // Now we found it in DC
   ac = hashAccessor->second.m_value;
   
