@@ -255,7 +255,7 @@ ConcurrentScalableCache(size_t maxSize, size_t numShards, Type type, int rebuild
       m_shards.emplace_back(std::make_shared<Cache::LFUCache<TKey, TValue, THash>>(s));
     else if(algType == Type::LRU_FH) {
       assert(FROZEN_THRESHOLD > 0);
-      m_shards.emplace_back(std::make_shared<Cache::LRU_FHCache<TKey, TValue, THash>>(s));
+      m_shards.emplace_back(std::make_shared<Cache::LRU_FHCache<TKey, TValue, THash>>(s, CHUNK_RATIO));
     }
     else if(algType == Type::Redis_LRU) {
       m_shards.emplace_back(std::make_shared<Cache::RedisLRUCache<TKey, TValue, THash>>(s));
@@ -268,7 +268,7 @@ ConcurrentScalableCache(size_t maxSize, size_t numShards, Type type, int rebuild
     }
     else if(algType == Type::LFU_FH) {
       assert(FROZEN_THRESHOLD > 0);
-      m_shards.emplace_back(std::make_shared<Cache::LFU_FHCache<TKey, TValue, THash>>(s));
+      m_shards.emplace_back(std::make_shared<Cache::LFU_FHCache<TKey, TValue, THash>>(s, CHUNK_RATIO));
     }
     else if(algType == Type::FIFO_FH) {
       assert(FROZEN_THRESHOLD > 0);

@@ -28,6 +28,7 @@
 #include <iostream>
 #include <string>
 #include <vector>
+#include <unordered_map>
 // stat
 #define FH_STAT
 #define HANDLE_WRITE
@@ -140,7 +141,7 @@ class LRU_FHCache : public FHCacheAPI<TKey, TValue, THash> {
   /**
    * Create a container with a given maximum size
    */
-  explicit LRU_FHCache(size_t maxSize);
+  explicit LRU_FHCache(size_t maxSize, double chunkRatio = 0.2);
 
   LRU_FHCache(const LRU_FHCache& other) = delete;
   LRU_FHCache& operator=(const LRU_FHCache&) = delete;
@@ -172,7 +173,7 @@ class LRU_FHCache : public FHCacheAPI<TKey, TValue, THash> {
   virtual bool insert(const TKey& key, const TValue& value) override;
 
 
-   virtual void melt_chunk() override;
+  virtual void melt_chunk() override;
 
   /**
    * Clear the container. NOT THREAD SAFE -- do not use while other threads
@@ -275,6 +276,12 @@ class LRU_FHCache : public FHCacheAPI<TKey, TValue, THash> {
   ListNode m_fast_head;
   ListNode m_fast_tail;
   ListNode *m_marker = nullptr;
+
+  std::vector<ListNode*> chunks;
+  const double CHUNK_RATIO;
+
+  std::unordered_map<TKey, int> chunkMapper;
+  std::atomic<int> chunkGlobalCounter; 
 };
 
 template <class TKey, class TValue, class THash>
@@ -282,8 +289,9 @@ typename LRU_FHCache<TKey, TValue, THash>::ListNode* const
     LRU_FHCache<TKey, TValue, THash>::OutOfListMarker = (ListNode*)-1;
 
 template <class TKey, class TValue, class THash>
-LRU_FHCache<TKey, TValue, THash>::LRU_FHCache(size_t maxSize)
+LRU_FHCache<TKey, TValue, THash>::LRU_FHCache(size_t maxSize, double chunkRatio)
     : m_maxSize(maxSize),
+      CHUNK_RATIO(chunkRatio),
       m_size(0),
       m_map(std::thread::hardware_concurrency() *
             4)  // it will automatically grow
@@ -307,9 +315,11 @@ LRU_FHCache<TKey, TValue, THash>::LRU_FHCache(size_t maxSize)
 
 template <class TKey, class TValue, class THash>
 bool LRU_FHCache<TKey, TValue, THash>::construct_ratio(double FC_ratio) {
-  assert(FC_ratio <= 1 && FC_ratio >=0);
+  assert(FC_ratio <= 1 && FC_ratio > 0);
+  std::unique_lock<ListMutex> upperLock(m_listMutex);
   assert(m_fast_head.m_next == &m_fast_tail);
   assert(m_fast_tail.m_prev == &m_fast_head);
+  upperLock.unlock();
 
   /* clear eviction counter to start */
   //assert(eviction_counter.load() == 0);
@@ -337,7 +347,20 @@ bool LRU_FHCache<TKey, TValue, THash>::construct_ratio(double FC_ratio) {
   ListNode* delete_temp;
   HashMapConstAccessor temp_hashAccessor;
 
+  // Chunk management logic
+  assert(CHUNK_RATIO > 0);
+  int chunkSize = std::ceil(FC_size * CHUNK_RATIO);
+  bool insertNextNodeInChunk = false;
+  int chunkCounter = 0;
+  chunks.clear();
+  chunkMapper.clear();
+
   while(temp_node != &m_fast_tail){
+    if (count % chunkSize == 0) {
+      insertNextNodeInChunk = true;
+      chunkCounter += 1;
+    }
+
     count++;
     auto eviction_count = eviction_counter.load();
     if(!m_map.find(temp_hashAccessor, temp_node->m_key)){
@@ -351,12 +374,20 @@ bool LRU_FHCache<TKey, TValue, THash>::construct_ratio(double FC_ratio) {
       fail_count++;
       continue;
     }
+
+    // Node exists
     m_fasthash->insert(temp_node->m_key, temp_hashAccessor->second.m_value);
+    chunkMapper[temp_node->m_key] = chunkCounter;
+    if (insertNextNodeInChunk) {
+      std::unique_lock<ListMutex> lock(m_listMutex);
+      chunks.push_back(temp_node);
+      lock.unlock();
+      insertNextNodeInChunk = false;
+    }
     temp_node = temp_node->m_next;
 
     // TODO @ Ziyue: eliminate FC_RELAXATION
     
-    // 
     if(count > FC_size - FC_RELAXATION && first_pass_flag){
       std::unique_lock<ListMutex> lock(m_listMutex);
       // m_fast_head.m_next is right
@@ -384,6 +415,8 @@ bool LRU_FHCache<TKey, TValue, THash>::construct_ratio(double FC_ratio) {
       first_pass_flag = false;
     }
   }
+  chunkGlobalCounter = chunkCounter + 1;
+  
   if(fail_count > 0)
     printf("fast hash insert num: %lu, fail count: %lu, m_size: %ld (FC_ratio: %.2lf)\n", 
         count, fail_count, m_size.load(), count*1.0/m_size.load());
@@ -416,6 +449,12 @@ bool LRU_FHCache<TKey, TValue, THash>::construct_tier() {
   ListNode* temp_node = m_fast_head.m_next;
   ListNode* delete_temp;
   HashMapConstAccessor temp_hashAccessor;
+
+  int chunkSize = std::ceil(m_size.load() * CHUNK_RATIO);
+  int chunkCounter = 0;
+  chunkMapper.clear();
+  chunks.clear();
+
   while(temp_node != &m_fast_tail){
 #ifdef HANDLE_WRITE
     if(temp_node->m_key == TOMB_KEY) {
@@ -445,9 +484,17 @@ bool LRU_FHCache<TKey, TValue, THash>::construct_tier() {
     }
 #endif
     m_fasthash->insert(temp_node->m_key, temp_hashAccessor->second.m_value);
+    chunkMapper[temp_node->m_key] = chunkCounter;
+    if (count % chunkSize == 0) {
+      chunkCounter += 1;
+      std::unique_lock<ListMutex> lock(m_listMutex);
+      chunks.push_back(temp_node);
+      lock.unlock();
+    }
     count++;
     temp_node = temp_node->m_next;
   }
+  chunkGlobalCounter = chunkCounter + 1;
   printf("fast hash insert num: %d, m_size: %ld (FC_ratio: %.2lf)\n", 
       count, m_size.load(), count*1.0/m_size.load());
   tier_ready = true;
@@ -492,6 +539,7 @@ void LRU_FHCache<TKey, TValue, THash>::debug(int status) {
 
 template <class TKey, class TValue, class THash>
 void LRU_FHCache<TKey, TValue, THash>::deconstruct() {
+  std::unique_lock<ListMutex> lock(m_listMutex);
   // assert(fast_hash_ready == false && tier_ready == false);
   assert(!((m_fast_head.m_next == &m_fast_tail) ^ (m_fast_tail.m_prev == &m_fast_head)));
   if(m_fast_head.m_next == &m_fast_tail){
@@ -500,7 +548,6 @@ void LRU_FHCache<TKey, TValue, THash>::deconstruct() {
     return;
   }
 
-  std::unique_lock<ListMutex> lock(m_listMutex);
   ListNode* node = m_head.m_next;
   m_fast_head.m_next->m_prev = &m_head;
   m_fast_tail.m_prev->m_next = node;
@@ -531,9 +578,9 @@ bool LRU_FHCache<TKey, TValue, THash>::find(TValue& ac,
 
   if(tier_ready || fast_hash_ready) {
 #ifdef HANDLE_WRITE
-    if(m_fasthash->find(key, ac) && (ac != nullptr))
+    if((chunkMapper.find(key) != chunkMapper.end()) && (chunkMapper[key] < chunkGlobalCounter) && m_fasthash->find(key, ac) && (ac != nullptr))
 #else
-    if(m_fasthash->find(key, ac))
+    if((chunkMapper.find(key) != chunkMapper.end()) && (chunkMapper[key] < chunkGlobalCounter) && m_fasthash->find(key, ac))
 #endif
     {
 
@@ -556,14 +603,17 @@ bool LRU_FHCache<TKey, TValue, THash>::find(TValue& ac,
     }
   }
 
-  if (!m_map.find(hashAccessor, key)) {
+  // Now we try to find in DC if data not in FC
+  if (!m_map.find(hashAccessor, key) || hashAccessor->second.m_listNode->m_key == TOMB_KEY) {
 #ifdef FH_STAT
     if(stat_yes) {
       LRU_FHCache::tbb_find_miss++;
     }
 #endif
+    // Not found in DC also (cache miss)
     return false;
   }
+  // Now we found it in DC
   ac = hashAccessor->second.m_value;
   if(!fast_hash_construct) {
     // Acquire the lock, but don't block if it is already held
@@ -678,7 +728,24 @@ bool LRU_FHCache<TKey, TValue, THash>::get_curve(bool& should_stop) {
 
 template <class TKey, class TValue, class THash>
  void  LRU_FHCache<TKey, TValue, THash>::melt_chunk() {
-  return;
+  if(!(fast_hash_ready || tier_ready) || fast_hash_construct) return;
+  std::unique_lock<ListMutex> lock(m_listMutex);
+  if (chunks.size() == 0) return;
+  ListNode* chunkNodeHead = chunks.back();
+  chunks.pop_back();
+  if(m_fast_tail.m_prev == &m_fast_head) return;
+  ListNode* lastNode = m_fast_tail.m_prev;
+  ListNode* nextNode = m_head.m_next;
+
+  chunkNodeHead->m_prev->m_next = &m_fast_tail;
+  m_fast_tail.m_prev = chunkNodeHead->m_prev;
+
+  m_head.m_next = chunkNodeHead;
+  chunkNodeHead->m_prev = &m_head;
+  lastNode->m_next = nextNode;
+  nextNode->m_prev = lastNode;
+  lock.unlock();
+  chunkGlobalCounter -= 1;
  }
 
 template <class TKey, class TValue, class THash>
@@ -893,8 +960,8 @@ void LRU_FHCache<TKey, TValue, THash>::delete_key(const TKey& key) {
     }
   }
   else if ((tier_ready || fast_hash_ready) && m_fasthash->find(key, ac) && (ac != nullptr)) {
-    node->m_key = TOMB_KEY;
     std::unique_lock<ListMutex> lock(m_listMutex);
+    node->m_key = TOMB_KEY;
     // m_fasthash.set_key_value(key, nullptr);
     // fast_hash_invalid++;
     lock.unlock();

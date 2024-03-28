@@ -341,12 +341,13 @@ bool FIFO_FHCache<TKey, TValue, THash>::construct_ratio(double FC_ratio) {
   HashMapConstAccessor temp_hashAccessor;
 
   // Chunk management logic
-  chunks.clear();
   assert(CHUNK_RATIO > 0);
   int chunkSize = std::ceil(FC_size*CHUNK_RATIO);
   bool insertNextNodeInChunk = false;
   int chunkCounter = 0;
+  chunks.clear();
   chunkMapper.clear();
+
   while(temp_node != &m_fast_tail) {
     if (count % chunkSize == 0) {
       insertNextNodeInChunk = true;
@@ -467,15 +468,10 @@ bool FIFO_FHCache<TKey, TValue, THash>::construct_tier() {
 
   int chunkSize = std::ceil(m_size.load() * CHUNK_RATIO);
   int chunkCounter = 0;
-  bool insertNextNodeInChunk = false;
   chunkMapper.clear();
   chunks.clear();
   
   while(temp_node != &m_fast_tail){
-    if (count % chunkSize == 0) {
-      insertNextNodeInChunk = true;
-      chunkCounter += 1;
-    }
 #ifdef HANDLE_WRITE
     /*
      * If the node key is tomb, clean tomb node; 
@@ -514,17 +510,15 @@ bool FIFO_FHCache<TKey, TValue, THash>::construct_tier() {
       continue;
     }
 #endif
-
     // Insert the valid node to Frozen
     m_fasthash->insert(temp_node->m_key, temp_hashAccessor->second.m_value);
     chunkMapper[temp_node->m_key] = chunkCounter;
-    if (insertNextNodeInChunk) {
+    if (count % chunkSize == 0) {
+      chunkCounter += 1;
       std::unique_lock<ListMutex> lock(m_listMutex);
       chunks.push_back(temp_node);
       lock.unlock();
-      insertNextNodeInChunk = false;
     }
-    
     count++;
     temp_node = temp_node->m_next;
   }
@@ -967,7 +961,7 @@ inline void FIFO_FHCache<TKey, TValue, THash>::pushAfter(ListNode* nodeBefore, L
 
 template <class TKey, class TValue, class THash>
 inline void FIFO_FHCache<TKey, TValue, THash>::melt_chunk() {
-  if(!fast_hash_ready) return;
+  if(!(fast_hash_ready || tier_ready) || fast_hash_construct) return;
   std::unique_lock<ListMutex> lock(m_listMutex);
   if (chunks.size() == 0) return;
   ListNode* chunkNodeHead = chunks.back();
