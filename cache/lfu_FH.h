@@ -159,10 +159,10 @@ public:
 
     virtual bool construct_ratio(double FC_ratio) override {
         assert(0 < FC_ratio && FC_ratio < 0.999);
-
-        std::unique_lock<ListMutex> lockA(m_listMutex);
         assert(m_fast_head.m_next == &m_fast_tail);
         assert(m_fast_tail.m_prev == &m_fast_head);
+        
+        std::unique_lock<ListMutex> lockA(m_listMutex);
         FH_construct = true;
         //m_fast_head.m_next = m_head.m_next;
         lockA.unlock();

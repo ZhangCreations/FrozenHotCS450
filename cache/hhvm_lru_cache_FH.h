@@ -316,10 +316,8 @@ LRU_FHCache<TKey, TValue, THash>::LRU_FHCache(size_t maxSize, double chunkRatio)
 template <class TKey, class TValue, class THash>
 bool LRU_FHCache<TKey, TValue, THash>::construct_ratio(double FC_ratio) {
   assert(FC_ratio <= 1 && FC_ratio > 0);
-  std::unique_lock<ListMutex> upperLock(m_listMutex);
   assert(m_fast_head.m_next == &m_fast_tail);
   assert(m_fast_tail.m_prev == &m_fast_head);
-  upperLock.unlock();
 
   /* clear eviction counter to start */
   //assert(eviction_counter.load() == 0);
@@ -539,7 +537,6 @@ void LRU_FHCache<TKey, TValue, THash>::debug(int status) {
 
 template <class TKey, class TValue, class THash>
 void LRU_FHCache<TKey, TValue, THash>::deconstruct() {
-  std::unique_lock<ListMutex> lock(m_listMutex);
   // assert(fast_hash_ready == false && tier_ready == false);
   assert(!((m_fast_head.m_next == &m_fast_tail) ^ (m_fast_tail.m_prev == &m_fast_head)));
   if(m_fast_head.m_next == &m_fast_tail){
@@ -548,6 +545,7 @@ void LRU_FHCache<TKey, TValue, THash>::deconstruct() {
     return;
   }
 
+  std::unique_lock<ListMutex> lock(m_listMutex);
   ListNode* node = m_head.m_next;
   m_fast_head.m_next->m_prev = &m_head;
   m_fast_tail.m_prev->m_next = node;
@@ -960,8 +958,9 @@ void LRU_FHCache<TKey, TValue, THash>::delete_key(const TKey& key) {
     }
   }
   else if ((tier_ready || fast_hash_ready) && m_fasthash->find(key, ac) && (ac != nullptr)) {
-    std::unique_lock<ListMutex> lock(m_listMutex);
     node->m_key = TOMB_KEY;
+    // Remove unneeded lock
+    std::unique_lock<ListMutex> lock(m_listMutex);
     // m_fasthash.set_key_value(key, nullptr);
     // fast_hash_invalid++;
     lock.unlock();

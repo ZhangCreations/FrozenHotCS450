@@ -973,13 +973,12 @@ CONSTRUCT:
     auto delta = (baseline_performance_with_threshold - performance)/baseline_performance_with_threshold * thput_step / baseline_step;
     performance_depletion += delta; // INTEGRATION to help decide whether to stop FH
 
-    printf("thput_step: %lu, ", thput_step);
-    printf("thput_step: %lu, ", thput_step);
-    printf("baseline_step: %lu, ", baseline_step);
-    printf("threshold: %.3lf, ", baseline_performance_with_threshold);
-    printf("performance: %.3lf, ", performance);
-    printf("delta: %.3lf, ", delta);
-    printf("depleted: %.3lf\n", performance_depletion);
+    // printf("thput_step: %lu, ", thput_step);
+    // printf("baseline_step: %lu, ", baseline_step);
+    // printf("threshold: %.3lf, ", baseline_performance_with_threshold);
+    // printf("performance: %.3lf, ", performance);
+    // printf("delta: %.3lf, ", delta);
+    // printf("depleted: %.3lf\n", performance_depletion);
     
     // Decide whether the FH performance is too bad, and go to baseline
     if(performance_depletion <= 0){
