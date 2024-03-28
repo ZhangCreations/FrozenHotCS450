@@ -150,6 +150,8 @@ class StrictLRUCache : public BaseCacheAPI<TKey, TValue, THash> {
    */
   virtual bool insert(const TKey& key, const TValue& value) override;
 
+  virtual void melt_chunk() override;
+
   /**
    * Clear the container. NOT THREAD SAFE -- do not use while other threads
    * are accessing the container.
@@ -276,6 +278,9 @@ bool StrictLRUCache<TKey, TValue, THash>::find(TValue& ac,
     StrictLRUCache::hit_num++;
   return true;
 }
+
+template <class TKey, class TValue, class THash>
+void StrictLRUCache<TKey, TValue, THash>::melt_chunk() {}
 
 template <class TKey, class TValue, class THash>
 bool StrictLRUCache<TKey, TValue, THash>::insert(const TKey& key,

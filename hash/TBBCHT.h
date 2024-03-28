@@ -7,7 +7,7 @@ namespace FastHash
     {
         typedef typename tbb::concurrent_hash_map<TKey, TValue> HashMap;
         typedef typename HashMap::const_accessor HashMapConstAccessor;
-        //typedef typename HashMap::accessor HashMapAccessor;
+        typedef typename HashMap::accessor HashMapAccessor;
         typedef typename HashMap::value_type HashMapValuePair;
 
     protected:
@@ -31,6 +31,16 @@ namespace FastHash
             } else {
                 return false;
             }
+        }
+
+        void erase(TKey idx) {
+            HashMapAccessor hashAccessor;
+            if (!m_map->find(hashAccessor, idx)) {
+                // Presumably unreachable
+                printf("m_key: %ld Presumably unreachable\n", idx);
+                return;
+            }
+            m_map.erase(hashAccessor);
         }
 
         TbbCHT(TKey size) {
