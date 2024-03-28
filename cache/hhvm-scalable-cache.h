@@ -204,7 +204,7 @@ private:
   std::queue<int> construct_container; // Note that this is a queue not a stack
   int PASS_THRESHOLD = 3;
 
-  int MELT_CHUNK_FRACTION = 0.2;
+  float CHUNK_RATIO = 0.2;
   int COUNT_THRESHOLD = 2;
   double performance_depletion = COUNT_THRESHOLD;
   double best_sleep = 0;
@@ -272,7 +272,7 @@ ConcurrentScalableCache(size_t maxSize, size_t numShards, Type type, int rebuild
     }
     else if(algType == Type::FIFO_FH) {
       assert(FROZEN_THRESHOLD > 0);
-      m_shards.emplace_back(std::make_shared<Cache::FIFO_FHCache<TKey, TValue, THash>>(s, MELT_CHUNK_FRACTION));
+      m_shards.emplace_back(std::make_shared<Cache::FIFO_FHCache<TKey, TValue, THash>>(s, CHUNK_RATIO));
     }
     else {
       printf("cannot find the cache type\n");
@@ -1037,11 +1037,11 @@ CONSTRUCT:
 
     /**
      * Trigger to melt next chunk if performance depletion fraction meets next threshold
-     * Ex: First chunk melts if performance degrades by more than MELT_CHUNK_FRACTION (20%) from COUNT_THRESHOLD (starting buffer)
+     * Ex: First chunk melts if performance degrades by more than CHUNK_RATIO (20%) from COUNT_THRESHOLD (starting buffer)
      * Importantly last chunk never melted, since if performance_depletion < 0, then deconstruction occurs earlier
     */
     double performance_depletion_fraction = 1 - (performance_depletion*1.0 / COUNT_THRESHOLD);
-    double performance_depletion_threshold = (melted_chunks_count + 1) * MELT_CHUNK_FRACTION;
+    double performance_depletion_threshold = (melted_chunks_count + 1) * CHUNK_RATIO;
     if (performance_depletion_fraction > performance_depletion_threshold) {
       melted_chunks_count++;
       for(size_t i = 0; i < m_numShards; i++) {
