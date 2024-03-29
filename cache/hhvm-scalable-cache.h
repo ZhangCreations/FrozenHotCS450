@@ -268,7 +268,7 @@ ConcurrentScalableCache(size_t maxSize, size_t numShards, Type type, int rebuild
     }
     else if(algType == Type::LFU_FH) {
       assert(FROZEN_THRESHOLD > 0);
-      m_shards.emplace_back(std::make_shared<Cache::LFU_FHCache<TKey, TValue, THash>>(s, CHUNK_RATIO));
+      m_shards.emplace_back(std::make_shared<Cache::LFU_FHCache<TKey, TValue, THash>>(s));
     }
     else if(algType == Type::FIFO_FH) {
       assert(FROZEN_THRESHOLD > 0);

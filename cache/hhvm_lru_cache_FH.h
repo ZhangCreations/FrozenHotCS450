@@ -694,7 +694,7 @@ bool LRU_FHCache<TKey, TValue, THash>::get_curve(bool& should_stop) {
 template <class TKey, class TValue, class THash>
  void  LRU_FHCache<TKey, TValue, THash>::melt_chunk() {
   if(!(fast_hash_ready || tier_ready) || fast_hash_construct) return;
-  if(m_fast_tail == nullptr || m_fast_tail.m_prev == &m_fast_head) return;
+  if(m_fast_tail.m_prev == &m_fast_head) return;
   assert(CHUNK_RATIO > 0);
   int chunkSize = std::ceil(FC_size*CHUNK_RATIO);
 
@@ -709,7 +709,7 @@ template <class TKey, class TValue, class THash>
       node_to_move->m_prev->m_next = &m_fast_tail;
       m_fast_tail.m_prev = node_to_move->m_prev;
       pushFront(node_to_move);
-      m_fasthash->erase(node_to_move->m_key);
+      m_fasthash->remove_key(node_to_move->m_key);
     }
     node_to_move = next_node_to_move;
   }
