@@ -204,7 +204,7 @@ private:
   std::queue<int> construct_container; // Note that this is a queue not a stack
   int PASS_THRESHOLD = 3;
 
-  float CHUNK_RATIO = 0.2;
+  float CHUNK_RATIO = 1.0/3.0;
   int COUNT_THRESHOLD = 2;
   double performance_depletion = COUNT_THRESHOLD;
   double best_sleep = 0;
