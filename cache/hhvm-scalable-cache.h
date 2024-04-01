@@ -204,7 +204,7 @@ private:
   std::queue<int> construct_container; // Note that this is a queue not a stack
   int PASS_THRESHOLD = 3;
 
-  float CHUNK_RATIO = 0.2;
+  float CHUNK_RATIO = 1.0/3.0;
   int COUNT_THRESHOLD = 2;
   double performance_depletion = COUNT_THRESHOLD;
   double best_sleep = 0;
@@ -223,6 +223,14 @@ private:
    * if not outperform too much, don't do FH */
   double FH_PERFORMANCE_THRESHOLD = 0.2;
 
+  // Dynamic periodic refresh
+  int MIN_REFRESH_PERIOD = 10;
+  int MAX_REFRESH_PERIOD = 100;
+  int REFRESH_THRESHOLD_MARGIN = 0.02;
+  int ADDITIVE_REFRESH_PERIOD_FACTOR = 10;
+  int SUBTRACTIVE_REFRESH_PERIOD_FACTOR = 10;
+
+  double previous_baseline_performance_with_threshold = 0;
 #endif
 };
 
@@ -255,7 +263,7 @@ ConcurrentScalableCache(size_t maxSize, size_t numShards, Type type, int rebuild
       m_shards.emplace_back(std::make_shared<Cache::LFUCache<TKey, TValue, THash>>(s));
     else if(algType == Type::LRU_FH) {
       assert(FROZEN_THRESHOLD > 0);
-      m_shards.emplace_back(std::make_shared<Cache::LRU_FHCache<TKey, TValue, THash>>(s));
+      m_shards.emplace_back(std::make_shared<Cache::LRU_FHCache<TKey, TValue, THash>>(s, CHUNK_RATIO));
     }
     else if(algType == Type::Redis_LRU) {
       m_shards.emplace_back(std::make_shared<Cache::RedisLRUCache<TKey, TValue, THash>>(s));
@@ -937,6 +945,18 @@ CONSTRUCT:
   else
     printf("fail %ld shard\n", fail_list.size());
   
+  // If new threshold has more than 2% lower latency than previous threshold, decrease refresh period
+  // Otherwise, increase the refresh period, except on first construct (no prev threshold)
+  // printf("baseline metric with threshold: %.3lf\n", baseline_performance_with_threshold);
+  // printf("previous baseline metric with threshold: %.3lf\n", previous_baseline_performance_with_threshold);
+  if (baseline_performance_with_threshold < previous_baseline_performance_with_threshold * (1 - REFRESH_THRESHOLD_MARGIN)) {
+    FROZEN_THRESHOLD = std::max(FROZEN_THRESHOLD - SUBTRACTIVE_REFRESH_PERIOD_FACTOR, MIN_REFRESH_PERIOD);
+  } else if (FROZEN_THRESHOLD < MAX_REFRESH_PERIOD && previous_baseline_performance_with_threshold != 0) {
+    FROZEN_THRESHOLD = std::min(FROZEN_THRESHOLD + ADDITIVE_REFRESH_PERIOD_FACTOR, MAX_REFRESH_PERIOD);
+  }
+  previous_baseline_performance_with_threshold = baseline_performance_with_threshold;
+  // printf("Frozen_Threshold: %d\n", FROZEN_THRESHOLD);
+
   printf("\n* end construct *\n"); // End of the FH construction
 
   stop_sample_stat = true; // disable req_latency_[] in client logic
@@ -973,13 +993,12 @@ CONSTRUCT:
     auto delta = (baseline_performance_with_threshold - performance)/baseline_performance_with_threshold * thput_step / baseline_step;
     performance_depletion += delta; // INTEGRATION to help decide whether to stop FH
 
-    printf("thput_step: %lu, ", thput_step);
-    printf("thput_step: %lu, ", thput_step);
-    printf("baseline_step: %lu, ", baseline_step);
-    printf("threshold: %.3lf, ", baseline_performance_with_threshold);
-    printf("performance: %.3lf, ", performance);
-    printf("delta: %.3lf, ", delta);
-    printf("depleted: %.3lf\n", performance_depletion);
+    // printf("thput_step: %lu, ", thput_step);
+    // printf("baseline_step: %lu, ", baseline_step);
+    // printf("threshold: %.3lf, ", baseline_performance_with_threshold);
+    // printf("performance: %.3lf, ", performance);
+    // printf("delta: %.3lf, ", delta);
+    // printf("depleted: %.3lf\n", performance_depletion);
     
     // Decide whether the FH performance is too bad, and go to baseline
     if(performance_depletion <= 0){

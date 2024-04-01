@@ -168,6 +168,7 @@ public:
         HashMapConstAccessor temp_hashAccessor;
         ListNode* out_node = m_head.m_next;
         freListNode* delete_temp;
+
         while(count < FC_size){
             freListNode* in_node = out_node->list.m_next;
             while(in_node != &out_node->list){
@@ -206,7 +207,7 @@ public:
     }
 
     virtual bool construct_tier() override {
-        std::unique_lock<ListMutex> lock(m_listMutex);
+        std::unique_lock<ListMutex> lockA(m_listMutex);
         FH_construct = true;
         tier_no_insert = true;
         assert(m_fast_head.m_next == &m_fast_tail);
@@ -218,10 +219,10 @@ public:
         m_head.m_next = &m_tail;
         m_tail.m_prev = &m_head;
 
-        lock.unlock();
+        lockA.unlock();
         ListNode* out_node = m_fast_head.m_next;
         HashMapConstAccessor temp_hashAccessor;
-        
+
         size_t count = 0;
         while(out_node != &m_fast_tail){
             //printf("out_node fre: %d\n", out_node->fre);
@@ -503,7 +504,21 @@ public:
         
     }
 
-    virtual void melt_chunk() override {}
+    virtual void melt_chunk() override {
+        if(!(FH_ready || tier_ready) || FH_construct) return;
+        std::unique_lock<ListMutex> lock(m_listMutex);
+        if(m_fast_tail.m_prev == &m_fast_head) return;
+        ListNode* node_to_move = m_fast_tail.m_prev;
+        ListNode* dc_old_first = m_head.m_next;
+
+        node_to_move->m_prev->m_next = &m_fast_tail;
+        m_fast_tail.m_prev = node_to_move->m_prev;
+
+        m_head.m_next = node_to_move;
+        node_to_move->m_prev = &m_head;
+        node_to_move->m_next = dc_old_first;
+        dc_old_first->m_prev = node_to_move;
+    }
     
     virtual bool insert(const TKey& key, const TValue& value) override {
         bool stat_yes = LFU_FHCache::sample_generator();
