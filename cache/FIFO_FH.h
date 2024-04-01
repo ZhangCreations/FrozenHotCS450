@@ -28,7 +28,6 @@
 #include <iostream>
 #include <string>
 #include <vector>
-#include <unordered_map>
 
 // stat
 #define FH_STAT
@@ -224,7 +223,6 @@ class FIFO_FHCache : public FHCacheAPI<TKey, TValue, THash> {
    */
   void melt_chunk();
 
-
   /**
    * Evict the least-recently used item from the container. This function does
    * its own locking.
@@ -242,6 +240,11 @@ class FIFO_FHCache : public FHCacheAPI<TKey, TValue, THash> {
    * number of elements in the container.
    */
   std::atomic<size_t> m_size;
+
+  /**
+   * The size of the frozen cache, recalculated on every construct_ratio call
+  */  
+  size_t FC_size;
 
   /**
    * The underlying TBB hash map.
@@ -273,11 +276,7 @@ class FIFO_FHCache : public FHCacheAPI<TKey, TValue, THash> {
   ListNode m_fast_tail;
   ListNode *m_marker = nullptr;
 
-  std::vector<ListNode*> chunks;
   const double CHUNK_RATIO;
-
-  std::unordered_map<TKey, int> chunkMapper;
-  std::atomic<int> chunkGlobalCounter; 
 };
 
 template <class TKey, class TValue, class THash>
@@ -326,7 +325,7 @@ bool FIFO_FHCache<TKey, TValue, THash>::construct_ratio(double FC_ratio) {
   fast_hash_construct = true;
   
   // Compute split sizes
-  size_t FC_size = FC_ratio * m_maxSize;
+  FC_size = FC_ratio * m_maxSize;
   size_t DC_size = m_maxSize - FC_size;
   printf("FC_size: %lu, DC_size: %lu\n", FC_size, DC_size);
   size_t fail_count = 0, count = 0;
@@ -338,20 +337,7 @@ bool FIFO_FHCache<TKey, TValue, THash>::construct_ratio(double FC_ratio) {
   ListNode* delete_temp;
   HashMapConstAccessor temp_hashAccessor;
 
-  // Chunk management logic
-  assert(CHUNK_RATIO > 0);
-  int chunkSize = std::ceil(FC_size*CHUNK_RATIO);
-  bool insertNextNodeInChunk = false;
-  int chunkCounter = 0;
-  chunks.clear();
-  chunkMapper.clear();
-
   while(temp_node != &m_fast_tail) {
-    if (count % chunkSize == 0) {
-      insertNextNodeInChunk = true;
-      chunkCounter += 1;
-    }
-
     count++;
     auto eviction_count = eviction_counter.load();
     
@@ -374,13 +360,6 @@ bool FIFO_FHCache<TKey, TValue, THash>::construct_ratio(double FC_ratio) {
     
     // Node exists
     m_fasthash->insert(temp_node->m_key, temp_hashAccessor->second.m_value);
-    chunkMapper[temp_node->m_key] = chunkCounter;
-    if (insertNextNodeInChunk) {
-      std::unique_lock<ListMutex> lock(m_listMutex);
-      chunks.push_back(temp_node);
-      lock.unlock();
-      insertNextNodeInChunk = false;
-    }
     temp_node = temp_node->m_next;
 
     // cutoff FC list, in two cases
@@ -418,7 +397,7 @@ bool FIFO_FHCache<TKey, TValue, THash>::construct_ratio(double FC_ratio) {
       first_pass_flag = false;
     }
   }
-  chunkGlobalCounter = chunkCounter + 1;
+  
   
   if(fail_count > 0)
     printf("fast hash insert num: %lu, fail count: %lu, m_size: %ld (FC_ratio: %.2lf)\n", 
@@ -464,11 +443,6 @@ bool FIFO_FHCache<TKey, TValue, THash>::construct_tier() {
   ListNode* delete_temp;
   HashMapConstAccessor temp_hashAccessor;
 
-  int chunkSize = std::ceil(m_size.load() * CHUNK_RATIO);
-  int chunkCounter = 0;
-  chunkMapper.clear();
-  chunks.clear();
-  
   while(temp_node != &m_fast_tail){
 #ifdef HANDLE_WRITE
     /*
@@ -510,17 +484,9 @@ bool FIFO_FHCache<TKey, TValue, THash>::construct_tier() {
 #endif
     // Insert the valid node to Frozen
     m_fasthash->insert(temp_node->m_key, temp_hashAccessor->second.m_value);
-    chunkMapper[temp_node->m_key] = chunkCounter;
-    if (count % chunkSize == 0) {
-      chunkCounter += 1;
-      std::unique_lock<ListMutex> lock(m_listMutex);
-      chunks.push_back(temp_node);
-      lock.unlock();
-    }
     count++;
     temp_node = temp_node->m_next;
   }
-  chunkGlobalCounter = chunkCounter + 1;
   printf("fast hash insert num: %d, m_size: %ld (FC_ratio: %.2lf)\n", 
       count, m_size.load(), count*1.0/m_size.load());
   tier_ready = true;
@@ -624,9 +590,9 @@ bool FIFO_FHCache<TKey, TValue, THash>::find(TValue& ac,
     // we can re-check this and remove it if possible
 
     // Generally when we found the thing in frozen cache
-    if((chunkMapper.find(key) != chunkMapper.end()) && (chunkMapper[key] < chunkGlobalCounter) && m_fasthash->find(key, ac) && (ac != nullptr))
+    if(m_fasthash->find(key, ac) && (ac != nullptr))
 #else
-    if((chunkMapper.find(key) != chunkMapper.end()) && (chunkMapper[key] < chunkGlobalCounter) && m_fasthash->find(key, ac))
+    if(m_fasthash->find(key, ac))
 #endif
     {
 #ifdef FH_STAT
@@ -649,7 +615,7 @@ bool FIFO_FHCache<TKey, TValue, THash>::find(TValue& ac,
   }
 
   // Now we try to find in DC if data not in FC
-  if (!m_map.find(hashAccessor, key) || hashAccessor->second.m_listNode->m_key == TOMB_KEY) {
+  if (!m_map.find(hashAccessor, key)) {
 #ifdef FH_STAT
     if(stat_yes) {
       FIFO_FHCache::tbb_find_miss++;
@@ -960,23 +926,25 @@ inline void FIFO_FHCache<TKey, TValue, THash>::pushAfter(ListNode* nodeBefore, L
 template <class TKey, class TValue, class THash>
 inline void FIFO_FHCache<TKey, TValue, THash>::melt_chunk() {
   if(!(fast_hash_ready || tier_ready) || fast_hash_construct) return;
-  std::unique_lock<ListMutex> lock(m_listMutex);
-  if (chunks.size() == 0) return;
-  ListNode* chunkNodeHead = chunks.back();
-  chunks.pop_back();
   if(m_fast_tail.m_prev == &m_fast_head) return;
-  ListNode* lastNode = m_fast_tail.m_prev;
-  ListNode* nextNode = m_head.m_next;
+  assert(CHUNK_RATIO > 0);
+  int chunkSize = std::ceil(FC_size*CHUNK_RATIO);
 
-  chunkNodeHead->m_prev->m_next = &m_fast_tail;
-  m_fast_tail.m_prev = chunkNodeHead->m_prev;
-
-  m_head.m_next = chunkNodeHead;
-  chunkNodeHead->m_prev = &m_head;
-  lastNode->m_next = nextNode;
-  nextNode->m_prev = lastNode;
-  lock.unlock();
-  chunkGlobalCounter -= 1;
+  std::unique_lock<ListMutex> lock(m_listMutex);
+  ListNode* node_to_move = m_fast_tail.m_prev;
+  for (int i = 0; node_to_move != &m_fast_head && i < chunkSize; i++) {
+    ListNode* next_node_to_move = node_to_move->m_prev;
+    if(node_to_move->m_key == TOMB_KEY) {
+      delink(node_to_move);
+      delete node_to_move;
+    } else {
+      node_to_move->m_prev->m_next = &m_fast_tail;
+      m_fast_tail.m_prev = node_to_move->m_prev;
+      pushFront(node_to_move);
+      m_fasthash->remove_key(node_to_move->m_key);
+    }
+    node_to_move = next_node_to_move;
+  }
 }
 
 // Eviction logic

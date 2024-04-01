@@ -4,7 +4,6 @@
 #include <map>
 #include <list>
 #include <shared_mutex>
-#include <unordered_map>
 
 #include "FHCache.h"
 
@@ -90,17 +89,11 @@ private:
     ListNode m_fast_tail;
     int fail_num = 0;
     long long int m_threshold = 0;
-
-    std::vector<ListNode*> chunks;
-    const double CHUNK_RATIO;
-
-    std::unordered_map<TKey, int> chunkMapper;
-    std::atomic<int> chunkGlobalCounter; 
     
 public:
     //typename LFU_FHCache::ListNode* const OutOfListMarker = (ListNode*)-1;
     
-    LFU_FHCache(size_t capacity, double chunkRatio) : CHUNK_RATIO(chunkRatio) {
+    LFU_FHCache(size_t capacity) {
         m_maxSize = capacity;
         s = 0;
 
@@ -158,7 +151,7 @@ public:
     }
 
     virtual bool construct_ratio(double FC_ratio) override {
-        assert(0 < FC_ratio && FC_ratio < 0.999);
+        assert(FC_ratio < 0.999);
         assert(m_fast_head.m_next == &m_fast_tail);
         assert(m_fast_tail.m_prev == &m_fast_head);
         
@@ -176,21 +169,9 @@ public:
         ListNode* out_node = m_head.m_next;
         freListNode* delete_temp;
 
-        // Chunk management logic
-        assert(CHUNK_RATIO > 0);
-        int chunkSize = std::ceil(FC_size*CHUNK_RATIO);
-        int chunkCounter = 0;
-        int insertNextNodeInChunkCount = 0;
-        chunks.clear();
-        chunkMapper.clear();
-        
         while(count < FC_size){
             freListNode* in_node = out_node->list.m_next;
             while(in_node != &out_node->list){
-                if (count % chunkSize == 0) {
-                    insertNextNodeInChunkCount++;
-                    chunkCounter++;
-                }
                 count++;
                 if(! m_map.find(temp_hashAccessor, in_node->m_key)){
                     delete_temp = in_node;
@@ -204,20 +185,11 @@ public:
                     continue;
                 }
                 m_fasthash->insert(in_node->m_key, temp_hashAccessor->second.val);
-                chunkMapper[in_node->m_key] = chunkCounter;
                 in_node = in_node->m_next;
-            }
-
-            if (insertNextNodeInChunkCount > 0) {
-                std::unique_lock<ListMutex> lockC(m_listMutex);
-                chunks.push_back(out_node);
-                lockC.unlock();
-                insertNextNodeInChunkCount--;
             }
             out_node = out_node->m_next;
             assert(out_node != &m_tail);
         }
-        chunkGlobalCounter = chunkCounter + 1;
         printf("Insert count: %lu (Aim FC_size: %lu), DC_size: %lu\n", count, FC_size, m_maxSize-count);
 
         std::unique_lock<ListMutex> lockB(m_listMutex);
@@ -251,13 +223,6 @@ public:
         ListNode* out_node = m_fast_head.m_next;
         HashMapConstAccessor temp_hashAccessor;
 
-        // Chunk management logic
-        int chunkSize = std::ceil(s.load() * CHUNK_RATIO);
-        int chunkCounter = 0;
-        int insertNextNodeInChunkCount = 0;
-        chunks.clear();
-        chunkMapper.clear();
-        
         size_t count = 0;
         while(out_node != &m_fast_tail){
             //printf("out_node fre: %d\n", out_node->fre);
@@ -272,27 +237,15 @@ public:
                     delink(delete_temp);
                     delete(delete_temp);
                 } else {
-                    if (count % chunkSize == 0) {
-                        insertNextNodeInChunkCount++;
-                        chunkCounter++;
-                    }
                     // printf("success key %d (count: %ld)\n", in_node->m_key, count);
                     // fflush(stdout);
                     m_fasthash->insert(in_node->m_key, temp_hashAccessor->second.val);
-                    chunkMapper[in_node->m_key] = chunkCounter;
                     count++;
                     in_node = in_node->m_next;
                 }
             }
-            if (insertNextNodeInChunkCount > 0) {
-                std::unique_lock<ListMutex> lockB(m_listMutex);
-                chunks.push_back(out_node);
-                lockB.unlock();
-                insertNextNodeInChunkCount--;
-            }
             out_node = out_node->m_next;
         }
-        chunkGlobalCounter = chunkCounter + 1;
 
         printf("fast hash insert num: %ld, m_size: %ld (FC_ratio: %.2lf)\n", count, s.load(), count*1.0/s.load());
         FH_ready = true;
@@ -385,7 +338,7 @@ public:
 
         if(status_first_ready) {
         STATUS_BACK:
-            if((chunkMapper.find(key) != chunkMapper.end()) && (chunkMapper[key] < chunkGlobalCounter) && m_fasthash->find(key, ac)){
+            if(m_fasthash->find(key, ac)){
                 if(stat_yes)
                     LFU_FHCache::fast_find_hit++;
                 return true;
@@ -554,22 +507,17 @@ public:
     virtual void melt_chunk() override {
         if(!(FH_ready || tier_ready) || FH_construct) return;
         std::unique_lock<ListMutex> lock(m_listMutex);
-        if (chunks.size() == 0) return;
-        ListNode* chunkNodeHead = chunks.back();
-        chunks.pop_back();
         if(m_fast_tail.m_prev == &m_fast_head) return;
-        ListNode* lastNode = m_fast_tail.m_prev;
-        ListNode* nextNode = m_head.m_next;
+        ListNode* node_to_move = m_fast_tail.m_prev;
+        ListNode* dc_old_first = m_head.m_next;
 
-        chunkNodeHead->m_prev->m_next = &m_fast_tail;
-        m_fast_tail.m_prev = chunkNodeHead->m_prev;
+        node_to_move->m_prev->m_next = &m_fast_tail;
+        m_fast_tail.m_prev = node_to_move->m_prev;
 
-        m_head.m_next = chunkNodeHead;
-        chunkNodeHead->m_prev = &m_head;
-        lastNode->m_next = nextNode;
-        nextNode->m_prev = lastNode;
-        lock.unlock();
-        chunkGlobalCounter -= 1;
+        m_head.m_next = node_to_move;
+        node_to_move->m_prev = &m_head;
+        node_to_move->m_next = dc_old_first;
+        dc_old_first->m_prev = node_to_move;
     }
     
     virtual bool insert(const TKey& key, const TValue& value) override {
