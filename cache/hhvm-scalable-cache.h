@@ -223,6 +223,14 @@ private:
    * if not outperform too much, don't do FH */
   double FH_PERFORMANCE_THRESHOLD = 0.2;
 
+  // Dynamic periodic refresh
+  int MIN_REFRESH_PERIOD = 10;
+  int MAX_REFRESH_PERIOD = 100;
+  int REFRESH_THRESHOLD_MARGIN = 0.02;
+  int ADDITIVE_REFRESH_PERIOD_FACTOR = 10;
+  int SUBTRACTIVE_REFRESH_PERIOD_FACTOR = 10;
+
+  double previous_baseline_performance_with_threshold = 0;
 #endif
 };
 
@@ -937,6 +945,18 @@ CONSTRUCT:
   else
     printf("fail %ld shard\n", fail_list.size());
   
+  // If new threshold has more than 2% lower latency than previous threshold, decrease refresh period
+  // Otherwise, increase the refresh period, except on first construct (no prev threshold)
+  // printf("baseline metric with threshold: %.3lf\n", baseline_performance_with_threshold);
+  // printf("previous baseline metric with threshold: %.3lf\n", previous_baseline_performance_with_threshold);
+  if (baseline_performance_with_threshold < previous_baseline_performance_with_threshold * (1 - REFRESH_THRESHOLD_MARGIN)) {
+    FROZEN_THRESHOLD = std::max(FROZEN_THRESHOLD - SUBTRACTIVE_REFRESH_PERIOD_FACTOR, MIN_REFRESH_PERIOD);
+  } else if (FROZEN_THRESHOLD < MAX_REFRESH_PERIOD && previous_baseline_performance_with_threshold != 0) {
+    FROZEN_THRESHOLD = std::min(FROZEN_THRESHOLD + ADDITIVE_REFRESH_PERIOD_FACTOR, MAX_REFRESH_PERIOD);
+  }
+  previous_baseline_performance_with_threshold = baseline_performance_with_threshold;
+  // printf("Frozen_Threshold: %d\n", FROZEN_THRESHOLD);
+
   printf("\n* end construct *\n"); // End of the FH construction
 
   stop_sample_stat = true; // disable req_latency_[] in client logic
