@@ -12,12 +12,12 @@ ZIPF_SIZE_RATIO = (0.5, 120)
 CACHE_SIZE = int(1000000 * ZIPF_SIZE_RATIO[0])
 REQUEST_NUM = ZIPF_SIZE_RATIO[1] * 1000000 * (2 * THREAD if THREAD <= 2 else THREAD)
 CACHE_TYPES = [
-    "LRU_FH",
-    # "LRU",
-    # "FIFO_FH",
-    # "FIFO",
-    # "LFU_FH",
-    # "LFU",
+    # "LRU_FH",
+    "LRU",
+    "FIFO_FH",
+    "FIFO",
+    "LFU_FH",
+    "LFU",
 ]
 ZIPF_CONST = 0.99
 LATENCY = 5
@@ -64,8 +64,7 @@ def run_experiment(num_runs, output_directory):
         for cache_type in CACHE_TYPES:
             freq = FH_REBUILD_FREQUENCY if "FH" in cache_type else 0
             output_file = f'{output_directory}/{cache_type}{run_num}.txt'
-            command = f"./build/test_trace {THREAD} {CACHE_SIZE} {REQUEST_NUM} {SHARD} Zipf " \
-                      f"{ZIPF_CONST} {cache_type} {LATENCY} {freq} > {output_file}"
+            command = f"./build/test_trace {THREAD} {CACHE_SIZE} {REQUEST_NUM} {SHARD} Zipf {ZIPF_CONST} {cache_type} {LATENCY} {freq} > {output_file}"
             print(f'Starting {command}')
             subprocess.run(command, shell=True)
             result = parse_stats(output_file)

@@ -85,7 +85,6 @@ class TraceLoader{
     // Zipf
     TraceLoader(const uint64_t num, double zipf_const){
         printf("using Zipfian as test trace!\n");
-        // size_t item_num = static_cast<size_t>(num);
         size_t item_num = 1000000;
         size_t workload_size = item_num * 4 / 1024;
         printf("workset size: %lu MB\n", workload_size);
@@ -94,13 +93,13 @@ class TraceLoader{
         auto zipf_generator = new ScrambledZipfianGenerator(0, item_num, zipf_const);
 
         auto start = std::chrono::high_resolution_clock::now();
-        requests_ = static_cast<request*>(malloc(item_num * 100 * sizeof(request)));
+        requests_ = (request*)malloc(item_num * 100 * sizeof(request));
         for(size_t i = 0; i < item_num * 100; i++){
             uint64_t next_ = zipf_generator->Next();
             requests_[i] = request(TraceLoader::READ, next_);
         }
         
-        queue_size = static_cast<size_t>(item_num * 100); // run 100 * working set size
+        queue_size = item_num * 100; // run 100 * working set size
         std::cout << "origin data size :" << queue_size << std::endl;
         auto end = std::chrono::high_resolution_clock::now();
         double time = std::chrono::duration<double>(end - start).count();
