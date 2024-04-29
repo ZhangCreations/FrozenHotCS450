@@ -22,7 +22,7 @@ frequency = 20
 thread_multiplier = 2
 zipf_const = 0.99
 ratio = 0.5
-num_requests = 5000000
+num_requests = 25000000
 cache_size = int(num_requests * ratio)
 
 # Argument parser
@@ -35,6 +35,7 @@ def parse_args():
 
 # Running the experiment
 def run_experiment(num_runs, output_directory):
+    agg_data = {cache_type: pd.DataFrame() for cache_type in CACHE_TYPES}
     for run_num in range(num_runs):
         destination_dir = f'{output_directory}/run_{run_num}'
         os.makedirs(destination_dir, exist_ok=True)
@@ -56,8 +57,7 @@ def run_experiment(num_runs, output_directory):
                         for j in range(4):
                             run_data.update({key: float(value) for key, value in REGEX_PATTERNS[j].search(lines[i + j]).groupdict().items()})
                         break
-
-            agg_data = pd.DataFrame().append(run_data, ignore_index=True)
+            agg_data[cache_type] = agg_data[cache_type].append(run_data, ignore_index=True)
     summarize_results(agg_data)
 
 def summarize_results(agg_data, output_directory):
