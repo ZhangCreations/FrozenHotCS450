@@ -1,28 +1,31 @@
 import os
 import re
+import argparse
+import subprocess
 import pandas as pd
 from datetime import datetime
-import subprocess
-import argparse
 
-## Cache Parameters
-SHARD = 16
-THREAD = 1
-ZIPF_SIZE_RATIO = (0.5, 120)
-CACHE_SIZE = int(1000000 * ZIPF_SIZE_RATIO[0])
-REQUEST_NUM = ZIPF_SIZE_RATIO[1] * 1000000 * (2 * THREAD if THREAD <= 2 else THREAD)
-CACHE_TYPES = [
-    # "LRU_FH",
-    "LRU",
-    "FIFO_FH",
-    "FIFO",
-    "LFU_FH",
-    "LFU",
+# Constants
+REGEX_PATTERNS = [
+    re.compile(r"All threads run (?P<run_time>[\d.]+) s"),
+    re.compile(r"- Hit Avg: (?P<hit_avg>[\d.]+) \(stat size: (?P<hit_stat_size>\d+), real size_: (?P<hit_real_size>\d+)\), median: (?P<hit_median>[\d.]+), p9999: (?P<hit_p9999>[\d.]+), p999: (?P<hit_p999>[\d.]+), p99: (?P<hit_p99>[\d.]+), p90: (?P<hit_p90>[\d.]+)"),
+    re.compile(r"- Other Avg: (?P<other_avg>[\d.]+) \(stat size: (?P<other_stat_size>\d+), real size_: (?P<other_real_size>\d+)\), median: (?P<other_median>[\d.]+), p9999: (?P<other_p9999>[\d.]+), p999: (?P<other_p999>[\d.]+), p99: (?P<other_p99>[\d.]+), p90: (?P<other_p90>[\d.]+)"),
+    re.compile(r"Total Avg Lat: (?P<total_avg_lat>[\d.]+) \(size: (?P<total_size>\d+), miss ratio: (?P<miss_ratio>[\d.]+)\)")
 ]
-ZIPF_CONST = 0.99
-LATENCY = 5
-FH_REBUILD_FREQUENCY = 20
+CACHE_TYPES = ["FIFO_FH", "LFU_FH", "LRU_FH", "FIFO", "LFU", "LRU"]
 
+# Configurable parameters
+thread = 1
+shard = 16
+latency = 5
+frequency = 20
+thread_multiplier = 2
+zipf_const = 0.99
+ratio = 0.5
+num_requests = 5000000
+cache_size = int(num_requests * ratio)
+
+# Argument parser
 def parse_args():
     """Parse command-line arguments."""
     parser = argparse.ArgumentParser(description='Testing Harness for FrozenHot Cache')
@@ -30,53 +33,53 @@ def parse_args():
     parser.add_argument('-n', '--experiment_name', type=str, help='Name of the experiment', default=datetime.now().strftime("%Y-%m-%d_%H:%M:%S"))
     return parser.parse_args()
 
-def parse_stats(file_path):
-    """Parse statistical data from the given file."""
-    regex_patterns = {
-        'total_time': re.compile(r"All threads run (?P<total_time>\d+\.\d+) s"),
-        'hit_avg_stats': re.compile(r"- Hit Avg: (?P<hit_avg>\d+\.\d+) \(stat size: (?P<hit_stat_size>\d+), real size_: (?P<hit_real_size>\d+)\), median: (?P<hit_median>\d+\.\d+), p9999: (?P<hit_p9999>\d+\.\d+), p999: (?P<hit_p999>\d+\.\d+), p99: (?P<hit_p99>\d+\.\d+), p90: (?P<hit_p90>\d+\.\d+)"),
-        'other_avg_stats': re.compile(r"- Other Avg: (?P<other_avg>\d+\.\d+) \(stat size: (?P<other_stat_size>\d+), real size_: (?P<other_real_size>\d+)\), median: (?P<other_median>\d+\.\d+), p9999: (?P<other_p9999>\d+\.\d+), p999: (?P<other_p999>\d+\.\d+), p99: (?P<other_p99>\d+\.\d+), p90: (?P<other_p90>\d+\.\d+)"),
-        'latency': re.compile(r"Total Avg Lat: (?P<total_avg_lat>\d+\.\d+) \(size: (?P<size>\d+), miss ratio: (?P<miss_ratio>\d+\.\d+)\)")
-    }
-    
-    data = {}
-    with open(file_path, 'r') as file:
-        lines = file.readlines()
-
-    for i, line in enumerate(lines):
-        if line.startswith("All threads run"):
-            data.update(regex_patterns['total_time'].search(lines[i]).groupdict())
-            data.update(regex_patterns['hit_avg_stats'].search(lines[i + 1]).groupdict())
-            data.update(regex_patterns['other_avg_stats'].search(lines[i + 2]).groupdict())
-            data.update(regex_patterns['latency'].search(lines[i + 3]).groupdict())
-            break
-
-    return data
-
-
+# Running the experiment
 def run_experiment(num_runs, output_directory):
-    """Run the experiment for given number of runs and save the results."""
-    
-
-    results_df = {cache_type: pd.DataFrame() for cache_type in CACHE_TYPES}
-
     for run_num in range(num_runs):
+        destination_dir = f'{output_directory}/run_{run_num}'
+        os.makedirs(destination_dir, exist_ok=True)
         for cache_type in CACHE_TYPES:
-            freq = FH_REBUILD_FREQUENCY if "FH" in cache_type else 0
-            output_file = f'{output_directory}/{cache_type}{run_num}.txt'
-            command = f"./build/test_trace {THREAD} {CACHE_SIZE} {REQUEST_NUM} {SHARD} Zipf {ZIPF_CONST} {cache_type} {LATENCY} {freq} > {output_file}"
-            print(f'Starting {command}')
-            subprocess.run(command, shell=True)
-            result = parse_stats(output_file)
-            result_df = pd.DataFrame([result])
-            results_df[cache_type] = pd.concat([results_df[cache_type], result_df], ignore_index=True)
+            run_data = {}
+            run_output_file = f'{destination_dir}/{cache_type}.txt'
+            command = f"./build/test_trace {thread} {cache_size} {num_requests} {shard} Zipf {zipf_const} {cache_type} {latency} {frequency} > {run_output_file}"
+            print(command)
+            try:
+                subprocess.run(command, check=True, shell=True)
+            except subprocess.CalledProcessError as e:
+                print(f"Command failed with error: {e}")
+                continue
 
-    for cache_type, df in results_df.items():
-        df.to_csv(f'{output_directory}/{cache_type}.csv', index=False)
+            with open(run_output_file, 'r') as file:
+                lines = file.readlines()
+                for i, line in enumerate(lines):
+                    if line.startswith("All threads run"):
+                        for j in range(4):
+                            run_data.update({key: float(value) for key, value in REGEX_PATTERNS[j].search(lines[i + j]).groupdict().items()})
+                        break
 
-    with open(f'{output_directory}/summary.txt', 'w'):
-        for cache_type, df in results_df.items():
-            print(f'{cache_type}:\n{df.describe()}\n\n')
+            agg_data = pd.DataFrame().append(run_data, ignore_index=True)
+    summarize_results(agg_data)
+
+def summarize_results(agg_data, output_directory):
+    output_dir = f"{output_directory}/summaries"
+    output_file = f"{output_dir}/results.txt"
+    os.makedirs(output_dir, exist_ok=True)
+
+    with open(output_file, 'w') as f:
+        for cache_type, df in agg_data.items():
+            output_csv = f"{output_dir}/{cache_type}.csv"
+            try:
+                df.to_csv(output_csv, index=False)
+            except Exception as e:
+                print(f"Failed to write {cache_type} to {output_csv} due to {e}")
+            f.write(f"Cache type: {cache_type}\n\n")
+            quantiles = df.quantile([0.25, 0.5, 0.75]).to_string(index=False, float_format="%.5f")
+            mean_results = df.mean().to_string(float_format="%.5f")
+
+            f.write(f"Cache type: {cache_type}\n\n")
+            f.write("Quantiles:\n" + quantiles + "\n\n")
+            f.write("Means:\n" + mean_results + "\n")
+            f.write("==========================================\n\n")
 
 if __name__ == "__main__":
     args = parse_args()

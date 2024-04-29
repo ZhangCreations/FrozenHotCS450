@@ -85,7 +85,7 @@ class TraceLoader{
     // Zipf
     TraceLoader(const uint64_t num, double zipf_const){
         printf("using Zipfian as test trace!\n");
-        size_t item_num = 1000000;
+        size_t item_num = static_cast<size_t>(num);
         size_t workload_size = item_num * 4 / 1024;
         printf("workset size: %lu MB\n", workload_size);
         printf("loading workload (%lu)...\n", num);
@@ -98,6 +98,10 @@ class TraceLoader{
             uint64_t next_ = zipf_generator->Next();
             requests_[i] = request(TraceLoader::READ, next_);
         }
+        // // pre-fault, to avoid page fault
+        // for(size_t i = 0; i < item_num * 100; i++){
+        //     auto req = requests_[i];
+        // }
         
         queue_size = item_num * 100; // run 100 * working set size
         std::cout << "origin data size :" << queue_size << std::endl;
