@@ -1,212 +1,89 @@
 import os
+import re
+import argparse
+import subprocess
+import pandas as pd
 from datetime import datetime
 
-Twitter_prefix = "TBF" # for cloud machine
-MSR_prefix = "TBF" # for cloud machine
-
-# "trace name":[{cache size: req num}, [covered subtraces]]
-Twitter_list = {
-    "cluster17": [{
-        1000000:500,  # large size for MS machine
-        }, [0, 9]],
-
-    "cluster45": [{
-        30000000:150,
-        # 30000000:1050, # only for rebuild freq
-        }, [0, 0]],
-
-    "cluster18": [{
-        2400000: 400,
-    }, [0, 12]],
-
-    "cluster24": [{
-        2000000: 200,
-    }, [0, 3]],
-
-    "cluster44": [{
-        40000000: 600,
-        # 40000000: 7500, # only for rebuild freq
-    }, [0, 5]],
-
-    "cluster52": [{
-        88000000: 800,
-        # 88000000: 10000, # only for rebuild freq
-    }, [0, 6]],
-
-    "cluster29": [{
-        900000: 100,
-    }, [0, 6]],
-}
-
-MSR_list = {
-    "prn_0":[3886547, 60],
-    "prn_1":[21209710, 60],
-    "proj_1":[183106310,
-        60,
-        #300, # only for rebuild freq
-        ],
-    "proj_2":[107516091,
-        60,
-        #180, # only for rebuild freq
-        ],
-    "proj_4":[32453536, 60],
-    "prxy_0":[230657,60],
-    "prxy_1":[3593602,
-        60,
-        #120, # only for rebuild freq
-        ],
-    "src1_0":[31787377, 60],
-    "src1_1":[31545608, 60],
-    "usr_1":[172674631,
-        60,
-        #300, # only for rebuild freq
-        ],
-    "usr_2":[99463868,
-        60,
-        #180, # only for rebuild freq
-        ],
-    "web_2":[17636571, 60],
-}
-
-workload_types = [
-    # "Twitter",
-    "Zipf",
-    # "MSR"
+# Constants
+REGEX_PATTERNS = [
+    re.compile(r"All threads run (?P<run_time>[\d.]+) s"),
+    re.compile(r"- Hit Avg: (?P<hit_avg>[\d.]+) \(stat size: (?P<hit_stat_size>\d+), real size_: (?P<hit_real_size>\d+)\), median: (?P<hit_median>[\d.]+), p9999: (?P<hit_p9999>[\d.]+), p999: (?P<hit_p999>[\d.]+), p99: (?P<hit_p99>[\d.]+), p90: (?P<hit_p90>[\d.]+)"),
+    re.compile(r"- Other Avg: (?P<other_avg>[\d.]+) \(stat size: (?P<other_stat_size>\d+), real size_: (?P<other_real_size>\d+)\), median: (?P<other_median>[\d.]+), p9999: (?P<other_p9999>[\d.]+), p999: (?P<other_p999>[\d.]+), p99: (?P<other_p99>[\d.]+), p90: (?P<other_p90>[\d.]+)"),
+    re.compile(r"Total Avg Lat: (?P<total_avg_lat>[\d.]+) \(size: (?P<total_size>\d+), miss ratio: (?P<miss_ratio>[\d.]+)\)")
 ]
-seg = [
-    16
-]
-thread_num = [
-    1,
-    # 20,
-    # 40,
-    # 60,
-    # 72,
-]
+CACHE_TYPES = ["FIFO_FH", "LFU_FH", "LRU_FH", "FIFO", "LFU", "LRU"]
 
-# this can change in different machine
-Zipf_size_ratio = {
-    0.5:120, # 97.5%
-    # 0.25:60, # 90%
-    # 0.004:40, # 50%
-}
-MSR_size_ratio = {
-    0.1,
-}
-cache_types = [
-    "LRU_FH",
-    # "LRU",
+# Configurable parameters
+thread = 1
+shard = 16
+latency = 5
+frequency = 20
+thread_multiplier = 2
+zipf_const = 0.99
+ratio = 0.5
+num_requests = 25000000
+cache_size = int(num_requests * ratio)
 
-    "FIFO_FH",
-    # "FIFO",
+# Argument parser
+def parse_args():
+    """Parse command-line arguments."""
+    parser = argparse.ArgumentParser(description='Testing Harness for FrozenHot Cache')
+    parser.add_argument('-r', '--num_runs', type=int, help='Number of runs for the experiment', required=True)
+    parser.add_argument('-n', '--experiment_name', type=str, help='Name of the experiment', default=datetime.now().strftime("%Y-%m-%d_%H:%M:%S"))
+    return parser.parse_args()
 
-    "LFU_FH",
-    # "LFU",
+# Running the experiment
+def run_experiment(num_runs, output_directory):
+    agg_data = {cache_type: pd.DataFrame() for cache_type in CACHE_TYPES}
+    for run_num in range(num_runs):
+        destination_dir = f'{output_directory}/run_{run_num}'
+        os.makedirs(destination_dir, exist_ok=True)
+        for cache_type in CACHE_TYPES:
+            run_data = {}
+            run_output_file = f'{destination_dir}/{cache_type}.txt'
+            command = f"./build/test_trace {thread} {cache_size} {num_requests} {shard} Zipf {zipf_const} {cache_type} {latency} {frequency} > {run_output_file}"
+            print(command)
+            try:
+                subprocess.run(command, check=True, shell=True)
+            except subprocess.CalledProcessError as e:
+                print(f"Command failed with error: {e}")
+                continue
 
-    # "Redis_LRU",
-    # "StrictLRU",
-]
-zipf = [
-    0.99,
-]
+            with open(run_output_file, 'r') as file:
+                lines = file.readlines()
+                for i, line in enumerate(lines):
+                    if line.startswith("All threads run"):
+                        for j in range(4):
+                            run_data.update({key: float(value) for key, value in REGEX_PATTERNS[j].search(lines[i + j]).groupdict().items()})
+                        break
+            agg_data[cache_type] = agg_data[cache_type].append(run_data, ignore_index=True)
+    summarize_results(agg_data)
 
-disk_lat = [
-    5,
-    # 15, 25, 35, 45, 55, 100, 500, # only for sensitivity analysis
-]
+def summarize_results(agg_data, output_directory):
+    output_dir = f"{output_directory}/summaries"
+    output_file = f"{output_dir}/results.txt"
+    os.makedirs(output_dir, exist_ok=True)
 
-FH_rebuild_freq = [
-    # 100, # only for lifetime factor
-    20, # by default (most experiments)
-    # 10, # only for lifetime factor
-]
+    with open(output_file, 'w') as f:
+        for cache_type, df in agg_data.items():
+            output_csv = f"{output_dir}/{cache_type}.csv"
+            try:
+                df.to_csv(output_csv, index=False)
+            except Exception as e:
+                print(f"Failed to write {cache_type} to {output_csv} due to {e}")
+            f.write(f"Cache type: {cache_type}\n\n")
+            quantiles = df.quantile([0.25, 0.5, 0.75]).to_string(index=False, float_format="%.5f")
+            mean_results = df.mean().to_string(float_format="%.5f")
 
-timestamp = datetime.now().strftime("%Y-%m-%d_%H:%M:%S")
-if not os.path.exists('benchmarks'):
-  os.mkdir('benchmarks')
+            f.write(f"Cache type: {cache_type}\n\n")
+            f.write("Quantiles:\n" + quantiles + "\n\n")
+            f.write("Means:\n" + mean_results + "\n")
+            f.write("==========================================\n\n")
 
-for thread in thread_num:
-    for shard in seg:
-        for lat in disk_lat:
-            for cache_type in cache_types:
-                # log format
-                path_1 = "log_" + str(shard) + "shard_"+ str(lat) + "u_" + str(thread) + "thd_"
-
-                if cache_type in ["LRU_FH", "FIFO_FH", "LFU_FH"]:
-                    freq_list = FH_rebuild_freq
-                else:
-                    freq_list = [0]
-
-                for freq in freq_list:
-                    for workload_type in workload_types:
-                        # <threads num> <cache size> <request num> <seg num> <workload type>
-                        # <workload file(s) (if not zipf)> <Zipf const (if zipf)> <cache type>
-                        # <disk lat>
-                        if not os.path.exists('benchmarks/' + timestamp):
-                          os.mkdir('benchmarks/' + timestamp)
-                        path_2 = 'benchmarks/' + timestamp + '/' + path_1 + workload_type + "_"
-                        if workload_type == "Zipf":
-                            if thread <= 2:
-                                thread_ = thread * 2
-                            else:
-                                thread_ = thread
-                            for ratio in Zipf_size_ratio:
-                                cache_size = int(1000000 * ratio)
-                                request_num = Zipf_size_ratio[ratio] * 1000000 * thread_ # rewrite
-                                for zipf_const in zipf:
-                                    output_file = path_2 + str(zipf_const) + "_" + str(ratio) + "size_" + cache_type + "_rebuild" + str(freq) + ".txt"
-                                    command = "./build/test_trace " + str(thread) + " " + str(cache_size) \
-                                            + " " + str(request_num) + " " + str(shard) + " " \
-                                            + workload_type + " " + str(zipf_const)+ " " + cache_type \
-                                            + " " + str(lat) + " " + str(freq) + " > " + output_file
-                                    print(command)
-                                    os.system(command)
-                        elif workload_type == "MSR":
-                            if thread <= 2:
-                                thread_ = thread * 4 # need warmup
-                            else:
-                                thread_ = thread
-                            for ratio in MSR_size_ratio:
-                                for trace in MSR_list:
-                                    if trace == "prxy_1" and thread == 1: # need warmup
-                                        thread_ = thread * 12
-                                    elif trace == "prxy_1" and thread == 20: # need warmup
-                                        thread_ = thread * 4
-                                    request_num = MSR_list[trace][1] * 1000000 * thread_ # rewrite
-                                    output_file = path_2 + trace + "_" + str(ratio) + "size_" + cache_type + "_rebuild" + str(freq) + ".txt"
-                                    cache_size = int(MSR_list[trace][0] * ratio)
-                                    trace_path = MSR_prefix + trace + ".csv"
-                                    os.system("sync; echo 1 > /proc/sys/vm/drop_caches")
-                                    # numactl to avoid numa impacts
-                                    command = "numactl --membind=0 ./build/test_trace " + str(thread) + " " + str(cache_size) \
-                                            + " " + str(request_num) + " " + str(shard) + " " \
-                                            + workload_type + " " + trace_path + " " + cache_type \
-                                            + " " + str(lat) + " " + str(freq) + " > " + output_file
-                                    print(command)
-                                    os.system(command)
-                        elif workload_type == "Twitter":
-                            if thread == 1: # need warmup
-                                thread_ = thread * 7.5
-                            else:
-                                thread_ = thread
-
-                            for trace in Twitter_list:
-                                if (trace == "cluster45" or trace == "cluster17") and thread == 1: # write heavy
-                                    thread_ = thread * 4
-                                elif (trace == "cluster44" or trace == "cluster52") and thread == 1: # need warmup
-                                    thread_ = thread * 15
-                                
-                                for cache_size in Twitter_list[trace][0]:
-                                    output_file = path_2 + trace + "_" + str(cache_size) + "_" + cache_type + "_rebuild" + str(freq) + ".txt"
-                                    start = Twitter_list[trace][1][0]
-                                    end = Twitter_list[trace][1][1]
-                                    request_num = Twitter_list[trace][0][cache_size] * 1000000 * thread_ # rewrite
-
-                                    trace_path = Twitter_prefix + trace
-                                    os.system("sync; echo 1 > /proc/sys/vm/drop_caches")
-                                    command = "numactl --membind=0 ./build/test_trace " + str(thread) + " " + str(cache_size) \
-                                            + " " + str(request_num) + " " + str(shard) + " " \
-                                            + workload_type + " " + trace_path + " " + cache_type \
-                                            + " " + str(lat) + " " + str(freq) + " " + str(start) + " " + str(end) + " > " + output_file
-                                    print(command)
-                                    os.system(command)
+if __name__ == "__main__":
+    args = parse_args()
+    output_directory = f'benchmarks/{args.experiment_name}'
+    os.makedirs(output_directory, exist_ok=True)
+    run_experiment(args.num_runs, output_directory)
+    print("Done!")
