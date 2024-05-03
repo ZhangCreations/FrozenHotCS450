@@ -85,7 +85,7 @@ class TraceLoader{
     // Zipf
     TraceLoader(const uint64_t num, double zipf_const){
         printf("using Zipfian as test trace!\n");
-        size_t item_num = 1000000;
+        size_t item_num = static_cast<size_t>(num);
         size_t workload_size = item_num * 4 / 1024;
         printf("workset size: %lu MB\n", workload_size);
         printf("loading workload (%lu)...\n", num);
